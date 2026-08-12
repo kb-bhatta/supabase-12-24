@@ -25,15 +25,15 @@ functions:
         name: Initialize Client
         code: |
           ```swift
-          let client = SupabaseClient(supabaseURL: URL(string: "https://xyzcompany.supabase.co")!, supabaseKey: "public-anon-key")
+          let client = SupabaseClient(supabaseURL: URL(string: "https://xyzcompany.supabase.co")!, supabaseKey: "publishable-or-anon-key")
           ```
       - id: initialize-client-custom-options
         name: Initialize Client with custom options
         code: |
           ```swift
-          let client = SupabaseClient(
+          let supabase = SupabaseClient(
             supabaseURL: URL(string: "https://xyzcompany.supabase.co")!,
-            supabaseKey: "public-anon-key",
+            supabaseKey: "publishable-or-anon-key",
             options: SupabaseClientOptions(
               db: .init(
                 schema: "public"
@@ -59,7 +59,7 @@ functions:
         isSpotlight: true
         code: |
           ```swift
-          let supabase = SupabaseClient(supabaseURL: URL(string: "https://xyzcompany.supabase.co")!, supabaseKey: "public-anon-key")
+          let supabase = SupabaseClient(supabaseURL: URL(string: "https://xyzcompany.supabase.co")!, supabaseKey: "publishable-or-anon-key")
           let auth = supabase.auth
           ```
       - id: create-auth-client-with-custom-storage
@@ -69,7 +69,7 @@ functions:
           ```swift
           let supabase = SupabaseClient(
             supabaseURL: URL(string: "https://xyzcompany.supabase.co")!,
-            supabaseKey: "public-anon-key",
+            supabaseKey: "publishable-or-anon-key",
             options: .init(
               auth: .init(
                 MyCustomLocalStorage()
@@ -120,7 +120,7 @@ functions:
       - id: sign-up-with-redirect
         name: Sign up with a redirect URL
         description: |
-          - See [redirect URLs and wildcards](/docs/guides/auth/overview#redirect-urls-and-wildcards) to add additional redirect URLs to your project.
+          - See [redirect URLs and wildcards](/docs/guides/auth/redirect-urls#use-wildcards-in-redirect-urls) to add additional redirect URLs to your project.
         code: |
           ```swift
           try await supabase.auth.signUp(
@@ -169,10 +169,10 @@ functions:
       - If you're using an email, you can configure whether you want the user to receive a magiclink or a OTP.
       - If you're using phone, you can configure whether you want the user to receive a OTP.
       - The magic link's destination URL is determined by the [`SITE_URL`](/docs/guides/auth/redirect-urls).
-      - See [redirect URLs and wildcards](/docs/guides/auth#redirect-urls-and-wildcards) to add additional redirect URLs to your project.
+      - See [redirect URLs and wildcards](/docs/guides/auth/redirect-urls#use-wildcards-in-redirect-urls) to add additional redirect URLs to your project.
       - Magic links and OTPs share the same implementation. To send users a one-time code instead of a magic link, [modify the magic link email template](/dashboard/project/_/auth/templates) to include `{{ .Token }}` instead of `{{ .ConfirmationURL }}`.
       - When using magic links, specify a `redirectTo` that matches a configured url scheme in your iOS app, so Supabase can correctly redirect back to your app.
-      - See our [Twilio Phone Auth Guide](/docs/guides/auth/phone-login/twilio) for details about configuring WhatsApp sign in.
+      - See our [Twilio Phone Auth Guide](/docs/guides/auth/phone-login?showSmsProvider=Twilio) for details about configuring WhatsApp sign in.
     examples:
       - id: sign-in-with-email
         name: Sign in with email
@@ -228,7 +228,7 @@ functions:
         isSpotlight: false
         description: |
           - When the third-party provider successfully authenticates the user, the provider redirects the user to the URL specified in the `redirectTo` parameter. This parameter defaults to the [`SITE_URL`](/docs/guides/auth/redirect-urls). It does not redirect the user immediately after invoking this method.
-          - See [redirect URLs and wildcards](/docs/guides/auth/overview#redirect-urls-and-wildcards) to add additional redirect URLs to your project.
+          - See [redirect URLs and wildcards](/docs/guides/auth/redirect-urls#use-wildcards-in-redirect-urls) to add additional redirect URLs to your project.
           - getOAuthSignInURL() provides the URL which needs to be opened in a SFSafariViewController instance.
           - The redirectTo URL needs to be setup correctly in your project under Authentication -> URL Configuration -> Redirect URLs.
         code: |
@@ -2070,7 +2070,7 @@ functions:
               (2, 'viola'),
               (3, 'cello');
             ```
-        reponse: |
+        response: |
           ```json
           {
             "data": [
@@ -3059,6 +3059,19 @@ functions:
           ```swift
           supabase.realtime.removeAllChannels()
           ```
+
+  - id: file-buckets
+    title: 'Overview'
+    notes: |
+      This section contains methods for working with File Buckets.
+  # - id: analytics-buckets
+  #   title: 'Overview'
+  #   notes: |
+  #     This section contains methods for working with Analytics Buckets.
+  # - id: vector-buckets
+  #   title: 'Overview'
+  #   notes: |
+  #     This section contains methods for working with Vector Buckets.
 
   - id: list-buckets
     title: listBuckets()

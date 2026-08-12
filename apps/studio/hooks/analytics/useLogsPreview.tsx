@@ -1,12 +1,16 @@
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
+import { useFlag } from 'common'
 import dayjs from 'dayjs'
-import { Dispatch, SetStateAction, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 
+import { useFillTimeseriesSorted } from './useFillTimeseriesSorted'
+import { useLogsUrlState } from './useLogsUrlState'
+import useTimeseriesUnixToIso from './useTimeseriesUnixToIso'
 import {
+  getDefaultHelper,
   LogsTableName,
   PREVIEWER_DATEPICKER_HELPERS,
-  getDefaultHelper,
-} from 'components/interfaces/Settings/Logs/Logs.constants'
+} from '@/components/interfaces/Settings/Logs/Logs.constants'
 import type {
   Count,
   EventChart,
@@ -15,16 +19,20 @@ import type {
   LogData,
   Logs,
   LogsEndpointParams,
-} from 'components/interfaces/Settings/Logs/Logs.types'
+} from '@/components/interfaces/Settings/Logs/Logs.types'
 import {
   genChartQuery,
   genCountQuery,
   genDefaultQuery,
-} from 'components/interfaces/Settings/Logs/Logs.utils'
-import { get } from 'data/fetchers'
-import { parseAsString, useQueryStates } from 'nuqs'
-import { useFillTimeseriesSorted } from './useFillTimeseriesSorted'
-import useTimeseriesUnixToIso from './useTimeseriesUnixToIso'
+} from '@/components/interfaces/Settings/Logs/Logs.utils'
+import {
+  genChartQueryOtel,
+  genCountQueryOtel,
+  genDefaultQueryOtel,
+  mapOtelPreviewRow,
+} from '@/components/interfaces/Settings/Logs/Logs.utils.otel'
+import { executeAnalyticsSql } from '@/data/logs/execute-analytics-sql'
+import { logsAllEndpointUrl, pickLogsQueryBuilder } from '@/data/logs/logs-endpoint'
 
 interface LogsPreviewHook {
   logData: LogData[]
@@ -39,9 +47,8 @@ interface LogsPreviewHook {
   eventChartData: EventChartData[]
   loadOlder: () => void
   refresh: () => void
-  setFilters: (filters: Filters | ((previous: Filters) => Filters)) => void
-  setParams: Dispatch<SetStateAction<LogsEndpointParams>>
 }
+
 function useLogsPreview({
   projectRef,
   table,
@@ -54,20 +61,60 @@ function useLogsPreview({
   limit?: number
 }): LogsPreviewHook {
   const defaultHelper = getDefaultHelper(PREVIEWER_DATEPICKER_HELPERS)
-  const [latestRefresh, setLatestRefresh] = useState<string>(new Date().toISOString())
+  const [latestRefresh, setLatestRefresh] = useState(new Date().toISOString())
 
-  const [filters, setFilters] = useState<Filters>({ ...filterOverride })
-  const isFirstRender = useRef<boolean>(true)
+  // When on, query the OTEL endpoint instead of BigQuery. logsAllEndpointUrl is
+  // inlined in each queryFn (not hoisted) so useOtel stays the only query dep.
+  const useOtel = useFlag('otelLegacyLogs')
 
-  const [queryParams, setQueryParams] = useQueryStates({
-    project: parseAsString.withDefault(projectRef),
-    iso_timestamp_start: parseAsString.withDefault(defaultHelper.calcFrom()),
-    iso_timestamp_end: parseAsString.withDefault(defaultHelper.calcTo()),
-  })
+  const {
+    timestampStart: urlTimestampStart,
+    timestampEnd: urlTimestampEnd,
+    filters: urlFilters,
+    search,
+  } = useLogsUrlState()
 
-  const [sql, setSQL] = useState(genDefaultQuery(table, filters, limit))
+  const timestampStart = useMemo(
+    () => urlTimestampStart || defaultHelper.calcFrom(),
+    [urlTimestampStart, defaultHelper]
+  )
+  const timestampEnd = useMemo(
+    () => urlTimestampEnd || defaultHelper.calcTo(),
+    [urlTimestampEnd, defaultHelper]
+  )
 
-  const params: LogsEndpointParams = { ...queryParams, sql }
+  const mergedFilters = useMemo(
+    () => ({
+      ...urlFilters,
+      ...filterOverride,
+      ...(search ? { search_query: search } : {}),
+    }),
+    [JSON.stringify(urlFilters), JSON.stringify(filterOverride), search]
+  )
+
+  const defaultSql = useMemo(
+    () =>
+      pickLogsQueryBuilder(useOtel, genDefaultQueryOtel, genDefaultQuery)(
+        table,
+        mergedFilters,
+        limit
+      ),
+    [useOtel, table, mergedFilters, limit]
+  )
+
+  const params: LogsEndpointParams = useMemo(
+    () => ({
+      iso_timestamp_start: timestampStart,
+      iso_timestamp_end: timestampEnd,
+      sql: defaultSql,
+    }),
+    [timestampStart, timestampEnd, defaultSql]
+  )
+
+  const queryKey = useMemo(
+    () => ['projects', projectRef, 'logs', params, defaultSql, { otel: useOtel }],
+    [projectRef, params, defaultSql, useOtel]
+  )
 
   const {
     data,
@@ -78,173 +125,155 @@ function useLogsPreview({
     fetchNextPage,
     isFetchingNextPage,
     refetch,
-  } = useInfiniteQuery(
-    ['projects', projectRef, 'logs', params],
-    async ({ signal, pageParam }) => {
-      const { data, error } = await get(`/platform/projects/{ref}/analytics/endpoints/logs.all`, {
-        params: {
-          path: { ref: projectRef },
-          query: {
-            ...params,
-            // don't overwrite unless user has already clicked on load older
-            iso_timestamp_end: pageParam || params.iso_timestamp_end,
-          },
-        },
+  } = useInfiniteQuery({
+    queryKey,
+    queryFn: async ({ signal, pageParam }) => {
+      const data = await executeAnalyticsSql({
+        projectRef,
+        endpoint: logsAllEndpointUrl(useOtel),
+        sql: defaultSql,
+        iso_timestamp_start: params.iso_timestamp_start ?? '',
+        iso_timestamp_end: (pageParam || params.iso_timestamp_end) ?? '',
+        method: 'get',
         signal,
       })
-      if (error) {
-        throw error
+      const logs = data as unknown as Logs
+      if (useOtel && logs?.result) {
+        return { ...logs, result: logs.result.map(mapOtelPreviewRow) } as Logs
       }
-
-      return data as unknown as Logs
+      return logs
     },
-    {
-      refetchOnWindowFocus: false,
-      getNextPageParam(lastPage) {
-        if ((lastPage.result?.length ?? 0) === 0) {
-          return undefined
-        }
-        const len = lastPage.result.length
-        const { timestamp: tsLimit }: LogData = lastPage.result[len - 1]
-        const isoTsLimit = dayjs.utc(Number(tsLimit / 1000)).toISOString()
-        return isoTsLimit
-      },
-    }
-  )
+    refetchOnWindowFocus: false,
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam(lastPage) {
+      if ((lastPage.result?.length ?? 0) === 0) {
+        return undefined
+      }
+      const len = lastPage.result.length
+      const { timestamp: tsLimit }: LogData = lastPage.result[len - 1]
+      const isoTsLimit = dayjs.utc(Number(tsLimit / 1000)).toISOString()
+      return isoTsLimit
+    },
+  })
 
-  useEffect(() => {
-    if (isFirstRender.current) {
-      isFirstRender.current = false
-      return
-    }
-    const newSql = genDefaultQuery(table, filters, limit)
-    setSQL(newSql)
-    refresh(newSql)
-  }, [JSON.stringify(filters)])
-
-  // memoize all this calculations stuff
   const { logData, error, oldestTimestamp } = useMemo(() => {
     let logData: LogData[] = []
-
     let error: null | string | object = rqError ? (rqError as any).message : null
-    data?.pages.forEach((response) => {
-      if (response.result) {
+
+    data?.pages?.forEach((response) => {
+      if (response?.result) {
         logData = [...logData, ...response.result]
       }
-      if (!error && response && response.error) {
+      if (!error && response?.error) {
         error = response.error
       }
     })
 
-    const oldestTimestamp = logData[logData.length - 1]?.timestamp
+    const oldestTimestamp = logData.length > 0 ? logData[logData.length - 1]?.timestamp : undefined
 
     return { logData, error, oldestTimestamp }
   }, [data?.pages])
 
-  const { data: countData } = useQuery(
-    [
+  const countQuerySql = useMemo(
+    () => pickLogsQueryBuilder(useOtel, genCountQueryOtel, genCountQuery)(table, mergedFilters),
+    [useOtel, table, mergedFilters]
+  )
+  const countQueryKey = useMemo(
+    () => [
       'projects',
       projectRef,
       'logs-count',
-      { ...params, sql: genCountQuery(table, filters), iso_timestamp_start: latestRefresh },
+      {
+        projectRef,
+        sql: countQuerySql,
+        iso_timestamp_start: latestRefresh,
+        iso_timestamp_end: timestampEnd,
+        table,
+        mergedFilters,
+        otel: useOtel,
+      },
     ],
-    async ({ signal }) => {
-      const { data, error } = await get(`/platform/projects/{ref}/analytics/endpoints/logs.all`, {
-        params: {
-          path: { ref: projectRef },
-          query: {
-            ...params,
-            sql: genCountQuery(table, filters),
-            iso_timestamp_start: latestRefresh,
-          },
-        },
+    [projectRef, countQuerySql, latestRefresh, timestampEnd, table, mergedFilters, useOtel]
+  )
+
+  const { data: countData } = useQuery({
+    queryKey: countQueryKey,
+    queryFn: async ({ signal }) => {
+      const data = await executeAnalyticsSql({
+        projectRef,
+        endpoint: logsAllEndpointUrl(useOtel),
+        sql: countQuerySql,
+        iso_timestamp_start: latestRefresh,
+        iso_timestamp_end: timestampEnd ?? '',
+        method: 'get',
         signal,
       })
-      if (error) {
-        throw error
-      }
-
       return data as unknown as Count
     },
-    {
-      refetchOnWindowFocus: false,
-      // refresh each minute only
-      refetchInterval: 60000,
-      // only enable if no errors are found and data has already been loaded
-      enabled: !error && data && data.pages.length > 0 ? true : false,
-    }
-  )
+    refetchOnWindowFocus: false,
+    refetchInterval: 60000,
+    enabled: !error && data && data?.pages?.length > 0 ? true : false,
+  })
 
   const newCount = countData?.result?.[0]?.count ?? 0
 
-  // chart data
   const chartQuery = useMemo(
-    () => genChartQuery(table, params, filters),
-    [table, params.iso_timestamp_end, params.project, filters]
+    () =>
+      pickLogsQueryBuilder(useOtel, genChartQueryOtel, genChartQuery)(table, params, mergedFilters),
+    [useOtel, table, params, mergedFilters]
   )
-  const { data: eventChartResponse, refetch: refreshEventChart } = useQuery(
-    [
+  const chartQueryKey = useMemo(
+    () => [
       'projects',
       projectRef,
       'logs-chart',
-      { iso_timestamp_end: params.iso_timestamp_end, project: params.project, sql: chartQuery },
+      {
+        projectRef,
+        sql: chartQuery,
+        iso_timestamp_start: timestampStart,
+        iso_timestamp_end: timestampEnd,
+        otel: useOtel,
+      },
     ],
-    async ({ signal }) => {
-      const { data, error } = await get(`/platform/projects/{ref}/analytics/endpoints/logs.all`, {
-        params: {
-          path: { ref: projectRef },
-          query: {
-            iso_timestamp_start: params.iso_timestamp_start ?? '',
-            iso_timestamp_end: params.iso_timestamp_end ?? '',
-            project: params.project ?? '',
-            sql: chartQuery,
-          },
-        },
-        signal,
-      })
-      if (error) {
-        throw error
-      }
-
-      return data as unknown as EventChart
-    },
-    { refetchOnWindowFocus: false }
+    [projectRef, chartQuery, timestampStart, timestampEnd, useOtel]
   )
 
-  const refresh = async (newSql?: string) => {
-    const generatedSql = newSql || genDefaultQuery(table, filters, limit)
-    setSQL(generatedSql)
-    setQueryParams((prev) => ({ ...prev, sql: generatedSql }))
+  const { data: eventChartResponse, refetch: refreshEventChart } = useQuery({
+    queryKey: chartQueryKey,
+    queryFn: async ({ signal }) => {
+      const data = await executeAnalyticsSql({
+        projectRef,
+        endpoint: logsAllEndpointUrl(useOtel),
+        sql: chartQuery,
+        iso_timestamp_start: timestampStart,
+        iso_timestamp_end: timestampEnd ?? '',
+        method: 'get',
+        signal,
+      })
+      return data as unknown as EventChart
+    },
+    refetchOnWindowFocus: false,
+  })
+
+  const refresh = useCallback(async () => {
     setLatestRefresh(new Date().toISOString())
     refreshEventChart()
     refetch()
-  }
-
-  const handleSetFilters: LogsPreviewHook['setFilters'] = (newFilters) => {
-    if (typeof newFilters === 'function') {
-      setFilters((prev) => {
-        const resolved = newFilters(prev)
-        return { ...resolved, ...filterOverride }
-      })
-    } else {
-      setFilters({ ...newFilters, ...filterOverride })
-    }
-  }
+  }, [refetch, refreshEventChart])
 
   const normalizedEventChartData = useTimeseriesUnixToIso(
     eventChartResponse?.result ?? [],
     'timestamp'
   )
 
-  const { data: eventChartData, error: eventChartError } = useFillTimeseriesSorted(
-    normalizedEventChartData,
-    'timestamp',
-    'count',
-    0,
-    params.iso_timestamp_start,
-    // default to current time if not set
-    params.iso_timestamp_end || new Date().toISOString()
-  )
+  const { data: eventChartData, error: eventChartError } = useFillTimeseriesSorted({
+    data: normalizedEventChartData,
+    timestampKey: 'timestamp',
+    valueKey: 'count',
+    defaultValue: 0,
+    startDate: timestampStart,
+    endDate: timestampEnd ?? new Date().toISOString(),
+  })
 
   return {
     newCount,
@@ -253,14 +282,12 @@ function useLogsPreview({
     isLoading: isLoading || isRefetching,
     isLoadingOlder: isFetchingNextPage,
     error: error || eventChartError,
-    filters,
+    filters: mergedFilters,
     params,
     oldestTimestamp: oldestTimestamp ? String(oldestTimestamp) : undefined,
     eventChartData,
-    setFilters: handleSetFilters,
     refresh,
     loadOlder: () => fetchNextPage(),
-    setParams: setQueryParams,
   }
 }
 export default useLogsPreview

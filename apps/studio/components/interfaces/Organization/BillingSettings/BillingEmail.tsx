@@ -1,26 +1,12 @@
 import { zodResolver } from '@hookform/resolvers/zod'
 import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { useEffect } from 'react'
-import { useForm } from 'react-hook-form'
-import { toast } from 'sonner'
-import { z } from 'zod'
-
 import { Form, FormControl, FormField } from '@ui/components/shadcn/ui/form'
 import { useParams } from 'common'
-import {
-  ScaffoldSection,
-  ScaffoldSectionContent,
-  ScaffoldSectionDetail,
-} from 'components/layouts/Scaffold'
-import { FormActions } from 'components/ui/Forms/FormActions'
-import { FormPanel } from 'components/ui/Forms/FormPanel'
-import { FormSection, FormSectionContent } from 'components/ui/Forms/FormSection'
-import NoPermission from 'components/ui/NoPermission'
-import { useOrganizationCustomerProfileQuery } from 'data/organizations/organization-customer-profile-query'
-import { useOrganizationUpdateMutation } from 'data/organizations/organization-update-mutation'
-import { useCheckPermissions } from 'hooks/misc/useCheckPermissions'
-import { useSelectedOrganization } from 'hooks/misc/useSelectedOrganization'
-import { FormMessage_Shadcn_, Input_Shadcn_ } from 'ui'
+import { useEffect } from 'react'
+import { useForm, useWatch } from 'react-hook-form'
+import { useInView } from 'react-intersection-observer'
+import { toast } from 'sonner'
+import { FormMessage, Input } from 'ui'
 import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
 import { InfoTooltip } from 'ui-patterns/info-tooltip'
 import {
@@ -29,6 +15,21 @@ import {
   MultiSelectorList,
   MultiSelectorTrigger,
 } from 'ui-patterns/multi-select'
+import { z } from 'zod'
+
+import {
+  ScaffoldSection,
+  ScaffoldSectionContent,
+  ScaffoldSectionDetail,
+} from '@/components/layouts/Scaffold'
+import { FormActions } from '@/components/ui/Forms/FormActions'
+import { FormPanel } from '@/components/ui/Forms/FormPanel'
+import { FormSection, FormSectionContent } from '@/components/ui/Forms/FormSection'
+import { NoPermission } from '@/components/ui/NoPermission'
+import { useOrganizationCustomerProfileQuery } from '@/data/organizations/organization-customer-profile-query'
+import { useOrganizationUpdateMutation } from '@/data/organizations/organization-update-mutation'
+import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { useSelectedOrganizationQuery } from '@/hooks/misc/useSelectedOrganization'
 
 const FORM_ID = 'org-billing-email'
 const formSchema = z.object({
@@ -38,18 +39,23 @@ const formSchema = z.object({
 
 const BillingEmail = () => {
   const { slug } = useParams()
-  const selectedOrganization = useSelectedOrganization()
+  const { data: selectedOrganization } = useSelectedOrganizationQuery()
 
   const { name, billing_email } = selectedOrganization ?? {}
 
-  const canUpdateOrganization = useCheckPermissions(PermissionAction.UPDATE, 'organizations')
-  const canReadBillingEmail = useCheckPermissions(
+  const { can: canReadBillingEmail, isSuccess: isPermissionsLoaded } = useAsyncCheckPermissions(
     PermissionAction.BILLING_READ,
     'stripe.subscriptions'
   )
+  const { can: canUpdateOrganization } = useAsyncCheckPermissions(
+    PermissionAction.UPDATE,
+    'organizations'
+  )
 
-  const { data: billingCustomer, isLoading: loadingBillingCustomer } =
-    useOrganizationCustomerProfileQuery({ slug }, { enabled: canReadBillingEmail })
+  const { ref, inView } = useInView({ triggerOnce: true })
+
+  const { data: billingCustomer, isPending: loadingBillingCustomer } =
+    useOrganizationCustomerProfileQuery({ slug }, { enabled: canReadBillingEmail && inView })
 
   const form = useForm<z.infer<typeof formSchema>>({
     resolver: zodResolver(formSchema),
@@ -58,11 +64,14 @@ const BillingEmail = () => {
       additionalBillingEmails: billingCustomer?.additional_emails ?? [],
     },
   })
-  const { additionalBillingEmails } = form.watch()
+  const additionalBillingEmails = useWatch({
+    control: form.control,
+    name: 'additionalBillingEmails',
+  })
   const { errors } = form.formState
   const additionalEmailsError = errors.additionalBillingEmails ?? []
 
-  const { mutate: updateOrganization, isLoading: isUpdating } = useOrganizationUpdateMutation()
+  const { mutate: updateOrganization, isPending: isUpdating } = useOrganizationUpdateMutation()
 
   const onUpdateOrganizationEmail = async (values: z.infer<typeof formSchema>) => {
     if (!canUpdateOrganization) {
@@ -90,14 +99,14 @@ const BillingEmail = () => {
   useEffect(() => {
     if (billingCustomer) {
       form.reset({
-        billingEmail: billing_email,
+        billingEmail: billing_email ?? '',
         additionalBillingEmails: billingCustomer.additional_emails ?? [],
       })
     }
   }, [billingCustomer])
 
   return (
-    <ScaffoldSection>
+    <ScaffoldSection ref={ref}>
       <ScaffoldSectionDetail>
         <div className="sticky space-y-2 top-12">
           <p className="text-foreground text-base m-0">Email Recipient</p>
@@ -107,7 +116,7 @@ const BillingEmail = () => {
         </div>
       </ScaffoldSectionDetail>
       <ScaffoldSectionContent>
-        {!canReadBillingEmail ? (
+        {isPermissionsLoaded && !canReadBillingEmail ? (
           <NoPermission resourceText="view this organization's email recipients" />
         ) : (
           <Form {...form}>
@@ -130,7 +139,7 @@ const BillingEmail = () => {
                   </div>
                 }
               >
-                <FormSection>
+                <FormSection className="px-8!">
                   <FormSectionContent fullWidth loading={loadingBillingCustomer}>
                     <FormField
                       control={form.control}
@@ -138,14 +147,14 @@ const BillingEmail = () => {
                       render={({ field }) => (
                         <FormItemLayout label="Email address">
                           <FormControl>
-                            <Input_Shadcn_
+                            <Input
                               type="email"
                               {...field}
                               placeholder="Email"
                               disabled={!canUpdateOrganization}
                             />
                           </FormControl>
-                          <FormMessage_Shadcn_ />
+                          <FormMessage />
                         </FormItemLayout>
                       )}
                     />
@@ -185,7 +194,7 @@ const BillingEmail = () => {
                           {Array.isArray(additionalEmailsError) &&
                             additionalEmailsError.length > 0 && (
                               <div className="flex flex-col gap-y-1 mt-2">
-                                {additionalEmailsError.map((x, idx) => (
+                                {additionalEmailsError.map((_x, idx) => (
                                   <p
                                     key={`email-error-${idx}`}
                                     className="text-sm text-destructive"

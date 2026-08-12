@@ -1,15 +1,9 @@
 import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { includes, noop } from 'lodash'
+import { useParams } from 'common'
+import { includes } from 'lodash'
 import { Edit3, MoreVertical, Trash } from 'lucide-react'
 import Image from 'next/legacy/image'
-
-import { useParams } from 'common'
-import { useProjectContext } from 'components/layouts/ProjectLayout/ProjectContext'
-import Table from 'components/to-be-cleaned/Table'
-import { ButtonTooltip } from 'components/ui/ButtonTooltip'
-import { useDatabaseHooksQuery } from 'data/database-triggers/database-triggers-query'
-import { useCheckPermissions } from 'hooks/misc/useCheckPermissions'
-import { BASE_PATH } from 'lib/constants'
+import { parseAsString, useQueryState } from 'nuqs'
 import {
   Badge,
   Button,
@@ -20,39 +14,48 @@ import {
   DropdownMenuTrigger,
 } from 'ui'
 
+import Table from '@/components/to-be-cleaned/Table'
+import { ButtonTooltip } from '@/components/ui/ButtonTooltip'
+import { useDatabaseHooksQuery } from '@/data/database-triggers/database-triggers-query'
+import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
+import { isEdgeFunctionUrl } from '@/lib/api/edgeFunctions'
+import { BASE_PATH } from '@/lib/constants'
+
 export interface HookListProps {
   schema: string
   filterString: string
-  editHook: (hook: any) => void
-  deleteHook: (hook: any) => void
 }
 
-const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: HookListProps) => {
+export const HookList = ({ schema, filterString }: HookListProps) => {
   const { ref } = useParams()
-  const { project } = useProjectContext()
+  const { data: project } = useSelectedProjectQuery()
   const { data: hooks } = useDatabaseHooksQuery({
     projectRef: project?.ref,
     connectionString: project?.connectionString,
   })
 
+  const [, setSelectedHookIdToEdit] = useQueryState('edit', parseAsString.withDefault(''))
+  const [, setSelectedHookIdToDelete] = useQueryState('delete', parseAsString.withDefault(''))
+
   const restUrl = project?.restUrl
-  const restUrlTld = restUrl ? new URL(restUrl).hostname.split('.').pop() : 'co'
 
   const filteredHooks = (hooks ?? []).filter(
-    (x: any) =>
+    (x) =>
       includes(x.name.toLowerCase(), filterString.toLowerCase()) &&
       x.schema === schema &&
       x.function_args.length >= 2
   )
-  const canUpdateWebhook = useCheckPermissions(PermissionAction.TENANT_SQL_ADMIN_WRITE, 'triggers')
+  const { can: canUpdateWebhook } = useAsyncCheckPermissions(
+    PermissionAction.TENANT_SQL_ADMIN_WRITE,
+    'triggers'
+  )
 
   return (
     <>
-      {filteredHooks.map((x: any) => {
-        const isEdgeFunction = (url: string) =>
-          url.includes(`https://${ref}.functions.supabase.${restUrlTld}/`) ||
-          url.includes(`https://${ref}.supabase.${restUrlTld}/functions/`)
+      {filteredHooks.map((x) => {
         const [url, method] = x.function_args
+        const isEdgeFunction = isEdgeFunctionUrl(url, ref ?? '', restUrl)
 
         return (
           <Table.tr key={x.id}>
@@ -61,7 +64,7 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
                 <div>
                   <Image
                     src={
-                      isEdgeFunction(url)
+                      isEdgeFunction
                         ? `${BASE_PATH}/img/function-providers/supabase-severless-function.png`
                         : `${BASE_PATH}/img/function-providers/http-request.png`
                     }
@@ -69,7 +72,7 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
                     layout="fixed"
                     width="20"
                     height="20"
-                    title={isEdgeFunction(url) ? 'Supabase Edge Function' : 'HTTP Request'}
+                    title={isEdgeFunction ? 'Supabase Edge Function' : 'HTTP Request'}
                   />
                 </div>
                 <p title={x.name} className="truncate">
@@ -87,7 +90,7 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
             </Table.td>
             <Table.td className="hidden xl:table-cell">
               <p className="truncate" title={url}>
-                <code className="font-mono text-xs">{method}</code>: {url}
+                <code className="text-code-inline">{method}</code>: {url}
               </p>
             </Table.td>
             <Table.td className="text-right">
@@ -95,17 +98,23 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
                 {canUpdateWebhook ? (
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
-                      <Button type="default" className="px-1" icon={<MoreVertical />} />
+                      <Button variant="default" className="px-1" icon={<MoreVertical />} />
                     </DropdownMenuTrigger>
 
                     <DropdownMenuContent side="left">
                       <>
-                        <DropdownMenuItem className="space-x-2" onClick={() => editHook(x)}>
+                        <DropdownMenuItem
+                          className="space-x-2"
+                          onClick={() => setSelectedHookIdToEdit(x.id.toString())}
+                        >
                           <Edit3 size="14" />
                           <p>Edit hook</p>
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
-                        <DropdownMenuItem className="space-x-2" onClick={() => deleteHook(x)}>
+                        <DropdownMenuItem
+                          className="space-x-2"
+                          onClick={() => setSelectedHookIdToDelete(x.id.toString())}
+                        >
                           <Trash stroke="red" size="14" />
                           <p>Delete hook</p>
                         </DropdownMenuItem>
@@ -115,7 +124,7 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
                 ) : (
                   <ButtonTooltip
                     disabled
-                    type="default"
+                    variant="default"
                     className="px-1"
                     icon={<MoreVertical />}
                     tooltip={{
@@ -134,5 +143,3 @@ const HookList = ({ schema, filterString, editHook = noop, deleteHook = noop }: 
     </>
   )
 }
-
-export default HookList

@@ -1,36 +1,34 @@
-import React from 'react'
-import { Button } from 'ui'
-import { githubStars } from '~/.contentlayer/generated/staticContent/_index.json' with { type: 'json' }
+import staticContent from '.generated/staticContent/_index.json'
 import { useSendTelemetryEvent } from '~/lib/telemetry'
-import { TelemetryActions } from 'common/telemetry-constants'
+import { Button } from 'ui'
+
+export const kFormatter = (num: number) => {
+  const kFormat = Math.floor(num / 1000)
+  const lastTwoDigits = num % 1000
+
+  const decimalPart = Math.floor((lastTwoDigits % 100) / 10)
+  const hundreds = Math.floor(lastTwoDigits / 100)
+
+  const isAlmostNextThousand = decimalPart >= 8 && hundreds >= 9
+
+  const showDecimals =
+    (!isAlmostNextThousand && hundreds >= 1) || (hundreds === 0 && decimalPart >= 8)
+
+  return showDecimals
+    ? `${kFormat}.${decimalPart >= 8 ? hundreds + 1 : hundreds}K`
+    : `${isAlmostNextThousand ? kFormat + 1 : kFormat}K`
+}
 
 const GitHubButton = () => {
-  const kFormatter = (num: number) => {
-    const kFormat = Math.floor(num / 1000)
-    const lastTwoDigits = num % 1000
-
-    const decimalPart = Math.floor((lastTwoDigits % 100) / 10)
-    const hundreds = Math.floor(lastTwoDigits / 100)
-
-    const isAlmostNextThousand = decimalPart >= 8 && hundreds >= 9
-
-    const showDecimals =
-      (!isAlmostNextThousand && hundreds >= 1) || (hundreds === 0 && decimalPart >= 8)
-
-    return showDecimals
-      ? `${kFormat}.${decimalPart >= 8 ? hundreds + 1 : hundreds}K`
-      : `${isAlmostNextThousand ? kFormat + 1 : kFormat}K`
-  }
   const sendTelemetryEvent = useSendTelemetryEvent()
+  const githubStars = staticContent.githubStars
 
   return (
     <Button
-      className="hidden group lg:flex text-foreground-light hover:text-foreground"
-      type="text"
+      className="hidden group lg:flex text-foreground-light hover:text-foreground in-data-nav-transparent:text-foreground"
+      variant="text"
       asChild
-      onClick={() =>
-        sendTelemetryEvent({ action: TelemetryActions.HOMEPAGE_GITHUB_BUTTON_CLICKED })
-      }
+      onClick={() => sendTelemetryEvent({ action: 'homepage_github_button_clicked' })}
     >
       <a type={undefined} href="https://github.com/supabase/supabase" target="_blank">
         <span className="flex items-center gap-1">

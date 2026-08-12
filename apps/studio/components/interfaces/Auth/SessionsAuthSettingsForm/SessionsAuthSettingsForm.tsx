@@ -1,31 +1,42 @@
+import { zodResolver } from '@hookform/resolvers/zod'
 import { PermissionAction } from '@supabase/shared-types/out/constants'
-import { useEffect } from 'react'
-import { toast } from 'sonner'
-import { boolean, number, object } from 'yup'
-
 import { useParams } from 'common'
-import { FormActions } from 'components/ui/Forms/FormActions'
-import { FormHeader } from 'components/ui/Forms/FormHeader'
-import { FormPanel } from 'components/ui/Forms/FormPanel'
-import { FormSection, FormSectionContent, FormSectionLabel } from 'components/ui/Forms/FormSection'
-import NoPermission from 'components/ui/NoPermission'
-import UpgradeToPro from 'components/ui/UpgradeToPro'
-import { useAuthConfigQuery } from 'data/auth/auth-config-query'
-import { useAuthConfigUpdateMutation } from 'data/auth/auth-config-update-mutation'
-import { useOrgSubscriptionQuery } from 'data/subscriptions/org-subscription-query'
-import { useCheckPermissions } from 'hooks/misc/useCheckPermissions'
-import { useSelectedOrganization } from 'hooks/misc/useSelectedOrganization'
-import { IS_PLATFORM } from 'lib/constants'
-
+import { useEffect, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { toast } from 'sonner'
 import {
-  AlertDescription_Shadcn_,
-  AlertTitle_Shadcn_,
-  Alert_Shadcn_,
+  Button,
+  Card,
+  CardContent,
+  CardFooter,
   Form,
-  InputNumber,
-  Toggle,
-  WarningIcon,
+  FormControl,
+  FormField,
+  FormInputGroupInput,
+  InputGroup,
+  InputGroupAddon,
+  InputGroupText,
+  Switch,
 } from 'ui'
+import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
+import {
+  PageSection,
+  PageSectionContent,
+  PageSectionMeta,
+  PageSectionSummary,
+  PageSectionTitle,
+} from 'ui-patterns/PageSection'
+import { GenericSkeletonLoader } from 'ui-patterns/ShimmeringLoader'
+import * as z from 'zod'
+
+import { AlertError } from '@/components/ui/AlertError'
+import { NoPermission } from '@/components/ui/NoPermission'
+import { UpgradeToPro } from '@/components/ui/UpgradeToPro'
+import { useAuthConfigQuery } from '@/data/auth/auth-config-query'
+import { useAuthConfigUpdateMutation } from '@/data/auth/auth-config-update-mutation'
+import { useCheckEntitlements } from '@/hooks/misc/useCheckEntitlements'
+import { useAsyncCheckPermissions } from '@/hooks/misc/useCheckPermissions'
+import { IS_PLATFORM } from '@/lib/constants'
 
 function HoursOrNeverText({ value }: { value: number }) {
   if (value === 0) {
@@ -37,59 +48,160 @@ function HoursOrNeverText({ value }: { value: number }) {
   }
 }
 
-const schema = object({
-  REFRESH_TOKEN_ROTATION_ENABLED: boolean().required(),
-  SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: number()
-    .min(0, 'Must be a value more than 0')
-    .required('Must have a Reuse Interval value'),
-  SESSIONS_TIMEBOX: number().min(0, 'Must be a positive number'),
-  SESSIONS_INACTIVITY_TIMEOUT: number().min(0, 'Must be a positive number'),
-  SESSIONS_SINGLE_PER_USER: boolean(),
+const MAX_JWT_EXP = 604800
+
+const AccessTokenSchema = z.object({
+  JWT_EXP: z.coerce
+    .number()
+    .int('Must be a whole number')
+    .positive('Must be greater than 0')
+    .max(MAX_JWT_EXP, `Must be less than ${MAX_JWT_EXP}`),
 })
 
-const SessionsAuthSettingsForm = () => {
+const RefreshTokenSchema = z.object({
+  REFRESH_TOKEN_ROTATION_ENABLED: z.boolean(),
+  SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: z.coerce.number().min(0, 'Must be a value more than 0'),
+})
+
+const UserSessionsSchema = z.object({
+  SESSIONS_TIMEBOX: z.coerce.number().min(0, 'Must be a positive number'),
+  SESSIONS_INACTIVITY_TIMEOUT: z.coerce
+    .number()
+    .multipleOf(0.1)
+    .min(0, 'Must be a positive number'),
+  SESSIONS_SINGLE_PER_USER: z.boolean(),
+})
+
+export const SessionsAuthSettingsForm = () => {
   const { ref: projectRef } = useParams()
   const {
     data: authConfig,
     error: authConfigError,
-    isLoading,
     isError,
-    isSuccess,
+    isPending: isLoading,
   } = useAuthConfigQuery({ projectRef })
-  const { mutate: updateAuthConfig, isLoading: isUpdatingConfig } = useAuthConfigUpdateMutation()
+  const { mutate: updateAuthConfig } = useAuthConfigUpdateMutation()
 
-  const formId = 'auth-config-sessions-form'
-  const canReadConfig = useCheckPermissions(PermissionAction.READ, 'custom_config_gotrue')
-  const canUpdateConfig = useCheckPermissions(PermissionAction.UPDATE, 'custom_config_gotrue')
+  // Separate loading states for each form
+  const [isUpdatingAccessToken, setIsUpdatingAccessToken] = useState(false)
+  const [isUpdatingRefreshTokens, setIsUpdatingRefreshTokens] = useState(false)
+  const [isUpdatingUserSessions, setIsUpdatingUserSessions] = useState(false)
 
-  const organization = useSelectedOrganization()
-  const { data: subscription, isSuccess: isSuccessSubscription } = useOrgSubscriptionQuery({
-    orgSlug: organization?.slug,
+  const { can: canReadConfig } = useAsyncCheckPermissions(
+    PermissionAction.READ,
+    'custom_config_gotrue'
+  )
+  const { can: canUpdateConfig } = useAsyncCheckPermissions(
+    PermissionAction.UPDATE,
+    'custom_config_gotrue'
+  )
+
+  const { hasAccess: hasUserSessionsEntitlement, isLoading: isLoadingEntitlements } =
+    useCheckEntitlements('auth.user_sessions')
+  const promptProPlanUpgrade = IS_PLATFORM && !hasUserSessionsEntitlement
+
+  const accessTokenForm = useForm<z.infer<typeof AccessTokenSchema>>({
+    resolver: zodResolver(AccessTokenSchema),
+    defaultValues: {
+      JWT_EXP: 3600,
+    },
   })
 
-  const isProPlanAndUp = isSuccessSubscription && subscription?.plan?.id !== 'free'
-  const promptProPlanUpgrade = IS_PLATFORM && !isProPlanAndUp
+  const refreshTokenForm = useForm<z.infer<typeof RefreshTokenSchema>>({
+    resolver: zodResolver(RefreshTokenSchema),
+    defaultValues: {
+      REFRESH_TOKEN_ROTATION_ENABLED: false,
+      SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: 0,
+    },
+  })
 
-  const INITIAL_VALUES = {
-    REFRESH_TOKEN_ROTATION_ENABLED: authConfig?.REFRESH_TOKEN_ROTATION_ENABLED || false,
-    SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: authConfig?.SECURITY_REFRESH_TOKEN_REUSE_INTERVAL,
-    SESSIONS_TIMEBOX: authConfig?.SESSIONS_TIMEBOX || 0,
-    SESSIONS_INACTIVITY_TIMEOUT: authConfig?.SESSIONS_INACTIVITY_TIMEOUT || 0,
-    SESSIONS_SINGLE_PER_USER: authConfig?.SESSIONS_SINGLE_PER_USER || false,
-  }
+  const userSessionsForm = useForm({
+    resolver: zodResolver(UserSessionsSchema),
+    defaultValues: {
+      SESSIONS_TIMEBOX: 0,
+      SESSIONS_INACTIVITY_TIMEOUT: 0,
+      SESSIONS_SINGLE_PER_USER: false,
+    },
+  })
 
-  const onSubmit = (values: any, { resetForm }: any) => {
+  useEffect(() => {
+    if (authConfig) {
+      // Only reset forms if they're not currently being updated
+      if (!isUpdatingAccessToken) {
+        accessTokenForm.reset({
+          JWT_EXP: authConfig.JWT_EXP ?? 3600,
+        })
+      }
+
+      if (!isUpdatingRefreshTokens) {
+        refreshTokenForm.reset({
+          REFRESH_TOKEN_ROTATION_ENABLED: authConfig.REFRESH_TOKEN_ROTATION_ENABLED || false,
+          SECURITY_REFRESH_TOKEN_REUSE_INTERVAL: authConfig.SECURITY_REFRESH_TOKEN_REUSE_INTERVAL,
+        })
+      }
+
+      if (!isUpdatingUserSessions) {
+        userSessionsForm.reset({
+          SESSIONS_TIMEBOX: authConfig.SESSIONS_TIMEBOX || 0,
+          SESSIONS_INACTIVITY_TIMEOUT: authConfig.SESSIONS_INACTIVITY_TIMEOUT || 0,
+          SESSIONS_SINGLE_PER_USER: authConfig.SESSIONS_SINGLE_PER_USER || false,
+        })
+      }
+    }
+  }, [authConfig, isUpdatingAccessToken, isUpdatingRefreshTokens, isUpdatingUserSessions])
+
+  const onSubmitAccessToken = (values: z.infer<typeof AccessTokenSchema>) => {
     const payload = { ...values }
+    setIsUpdatingAccessToken(true)
 
     updateAuthConfig(
       { projectRef: projectRef!, config: payload },
       {
         onError: (error) => {
-          toast.error(`Failed to update settings: ${error?.message}`)
+          toast.error(`Failed to update access token settings: ${error?.message}`)
+          setIsUpdatingAccessToken(false)
         },
         onSuccess: () => {
-          toast.success('Successfully updated settings')
-          resetForm({ values: values, initialValues: values })
+          toast.success('Successfully updated access token settings')
+          setIsUpdatingAccessToken(false)
+        },
+      }
+    )
+  }
+
+  const onSubmitRefreshTokens = (values: any) => {
+    const payload = { ...values }
+    setIsUpdatingRefreshTokens(true)
+
+    updateAuthConfig(
+      { projectRef: projectRef!, config: payload },
+      {
+        onError: (error) => {
+          toast.error(`Failed to update refresh token settings: ${error?.message}`)
+          setIsUpdatingRefreshTokens(false)
+        },
+        onSuccess: () => {
+          toast.success('Successfully updated refresh token settings')
+          setIsUpdatingRefreshTokens(false)
+        },
+      }
+    )
+  }
+
+  const onSubmitUserSessions = (values: any) => {
+    const payload = { ...values }
+    setIsUpdatingUserSessions(true)
+
+    updateAuthConfig(
+      { projectRef: projectRef!, config: payload },
+      {
+        onError: (error) => {
+          toast.error(`Failed to update user session settings: ${error?.message}`)
+          setIsUpdatingUserSessions(false)
+        },
+        onSuccess: () => {
+          toast.success('Successfully updated user session settings')
+          setIsUpdatingUserSessions(false)
         },
       }
     )
@@ -97,122 +209,316 @@ const SessionsAuthSettingsForm = () => {
 
   if (isError) {
     return (
-      <Alert_Shadcn_ variant="destructive">
-        <WarningIcon />
-        <AlertTitle_Shadcn_>Failed to retrieve auth configuration</AlertTitle_Shadcn_>
-        <AlertDescription_Shadcn_>{authConfigError.message}</AlertDescription_Shadcn_>
-      </Alert_Shadcn_>
+      <PageSection>
+        <PageSectionContent>
+          <AlertError error={authConfigError} subject="Failed to retrieve auth configuration" />
+        </PageSectionContent>
+      </PageSection>
     )
   }
 
   if (!canReadConfig) {
-    return <NoPermission resourceText="view auth configuration settings" />
+    return (
+      <PageSection>
+        <PageSectionContent>
+          <NoPermission resourceText="view auth configuration settings" />
+        </PageSectionContent>
+      </PageSection>
+    )
+  }
+
+  if (isLoading || isLoadingEntitlements) {
+    return (
+      <PageSection>
+        <PageSectionContent>
+          <GenericSkeletonLoader />
+        </PageSectionContent>
+      </PageSection>
+    )
   }
 
   return (
-    <Form id={formId} initialValues={INITIAL_VALUES} onSubmit={onSubmit} validationSchema={schema}>
-      {({ handleReset, resetForm, values, initialValues }: any) => {
-        const hasChanges = JSON.stringify(values) !== JSON.stringify(initialValues)
-
-        // Form is reset once remote data is loaded in store
-        // eslint-disable-next-line react-hooks/rules-of-hooks
-        useEffect(() => {
-          if (isSuccess) resetForm({ values: INITIAL_VALUES, initialValues: INITIAL_VALUES })
-        }, [isSuccess])
-
-        return (
-          <>
-            <FormPanel
-              disabled={true}
-              footer={
-                <div className="flex py-4 px-8">
-                  <FormActions
-                    form={formId}
-                    isSubmitting={isUpdatingConfig}
-                    hasChanges={hasChanges}
-                    handleReset={handleReset}
-                    disabled={!canUpdateConfig}
-                    helper={
-                      !canUpdateConfig
-                        ? 'You need additional permissions to update authentication settings'
-                        : undefined
-                    }
-                  />
-                </div>
-              }
+    <>
+      <PageSection>
+        <PageSectionMeta>
+          <PageSectionSummary>
+            <PageSectionTitle>User Sessions</PageSectionTitle>
+          </PageSectionSummary>
+        </PageSectionMeta>
+        <PageSectionContent>
+          <Form {...userSessionsForm}>
+            <form
+              onSubmit={userSessionsForm.handleSubmit(onSubmitUserSessions)}
+              className="space-y-4"
             >
-              <FormSection header={<FormSectionLabel>Refresh Tokens</FormSectionLabel>}>
-                <FormSectionContent loading={isLoading}>
-                  <Toggle
-                    id="REFRESH_TOKEN_ROTATION_ENABLED"
-                    size="small"
-                    label="Detect and revoke potentially compromised refresh tokens"
-                    layout="flex"
-                    descriptionText="Prevent replay attacks from potentially compromised refresh tokens."
-                    disabled={!canUpdateConfig}
+              <Card>
+                <CardContent>
+                  <FormField
+                    control={userSessionsForm.control}
+                    name="SESSIONS_SINGLE_PER_USER"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Enforce single session per user"
+                        description="If enabled, all but a user's most recently active session will be terminated."
+                      >
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                            disabled={!canUpdateConfig || !hasUserSessionsEntitlement}
+                          />
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
                   />
-                  {values.REFRESH_TOKEN_ROTATION_ENABLED && (
-                    <InputNumber
-                      id="SECURITY_REFRESH_TOKEN_REUSE_INTERVAL"
-                      size="small"
-                      min={0}
-                      label="Refresh token reuse interval"
-                      descriptionText="Time interval where the same refresh token can be used multiple times to request for an access token. Recommendation: 10 seconds."
-                      actions={<span className="mr-3 text-foreground-lighter">seconds</span>}
-                      disabled={!canUpdateConfig}
-                    />
-                  )}
-                </FormSectionContent>
-              </FormSection>
+                </CardContent>
 
-              <FormSection header={<FormSectionLabel>User Sessions</FormSectionLabel>}>
-                <FormSectionContent loading={isLoading}>
-                  {promptProPlanUpgrade && (
-                    <UpgradeToPro
-                      primaryText="Upgrade to Pro"
-                      secondaryText="Configuring user sessions requires the Pro Plan."
-                    />
+                <CardContent>
+                  <FormField
+                    control={userSessionsForm.control}
+                    name="SESSIONS_TIMEBOX"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Time-box user sessions"
+                        description="The amount of time before a user is forced to sign in again. Use 0 for never."
+                      >
+                        <FormControl className="w-full">
+                          <InputGroup>
+                            <FormInputGroupInput
+                              type="number"
+                              min={0}
+                              {...field}
+                              disabled={!canUpdateConfig || !hasUserSessionsEntitlement}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupText>
+                                <HoursOrNeverText value={field.value || 0} />
+                              </InputGroupText>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
+                  />
+                </CardContent>
+
+                <CardContent>
+                  <FormField
+                    control={userSessionsForm.control}
+                    name="SESSIONS_INACTIVITY_TIMEOUT"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Inactivity timeout"
+                        description="The amount of time a user needs to be inactive to be forced to sign in again. Use 0 for never."
+                      >
+                        <FormControl className="w-full">
+                          <InputGroup>
+                            <FormInputGroupInput
+                              type="number"
+                              {...field}
+                              className="flex-1"
+                              disabled={!canUpdateConfig || !hasUserSessionsEntitlement}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupText>
+                                <HoursOrNeverText value={field.value || 0} />
+                              </InputGroupText>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
+                  />
+                </CardContent>
+
+                {promptProPlanUpgrade && (
+                  <UpgradeToPro
+                    fullWidth
+                    source="authSessions"
+                    featureProposition="configure user sessions"
+                    primaryText="Configuring user sessions is only available on the Pro Plan and above"
+                    secondaryText="Upgrade to Pro Plan to configure settings for user sessions."
+                  />
+                )}
+
+                <CardFooter className="justify-end space-x-2">
+                  {userSessionsForm.formState.isDirty && (
+                    <Button variant="default" onClick={() => userSessionsForm.reset()}>
+                      Cancel
+                    </Button>
                   )}
-                  <Toggle
-                    id="SESSIONS_SINGLE_PER_USER"
-                    size="small"
-                    label="Enforce single session per user"
-                    layout="flex"
-                    descriptionText="If enabled, all but a user's most recently active session will be terminated."
-                    disabled={!canUpdateConfig || !isProPlanAndUp}
-                  />
-                  <InputNumber
-                    id="SESSIONS_TIMEBOX"
-                    size="small"
-                    label="Time-box user sessions"
-                    descriptionText="The amount of time before a user is forced to sign in again. Use 0 for never"
-                    actions={
-                      <span className="mr-3 text-foreground-lighter">
-                        <HoursOrNeverText value={values.SESSIONS_TIMEBOX} />
-                      </span>
+                  <Button
+                    variant={promptProPlanUpgrade ? 'default' : 'primary'}
+                    type="submit"
+                    disabled={
+                      !canUpdateConfig ||
+                      isUpdatingUserSessions ||
+                      !userSessionsForm.formState.isDirty
                     }
-                    disabled={!canUpdateConfig || !isProPlanAndUp}
+                    loading={isUpdatingUserSessions}
+                  >
+                    Save changes
+                  </Button>
+                </CardFooter>
+              </Card>
+            </form>
+          </Form>
+        </PageSectionContent>
+      </PageSection>
+
+      <PageSection>
+        <PageSectionMeta>
+          <PageSectionSummary>
+            <PageSectionTitle>Access Tokens</PageSectionTitle>
+          </PageSectionSummary>
+        </PageSectionMeta>
+        <PageSectionContent>
+          <Form {...accessTokenForm}>
+            <form
+              onSubmit={accessTokenForm.handleSubmit(onSubmitAccessToken)}
+              className="space-y-4"
+            >
+              <Card>
+                <CardContent>
+                  <FormField
+                    control={accessTokenForm.control}
+                    name="JWT_EXP"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Access token expiry time"
+                        description="How long access tokens are valid for before they must be refreshed. Recommendation: 3600 seconds."
+                      >
+                        <FormControl className="w-full">
+                          <InputGroup>
+                            <FormInputGroupInput
+                              type="number"
+                              min={1}
+                              {...field}
+                              disabled={!canUpdateConfig}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupText>seconds</InputGroupText>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
                   />
-                  <InputNumber
-                    id="SESSIONS_INACTIVITY_TIMEOUT"
-                    size="small"
-                    label="Inactivity timeout"
-                    descriptionText="The amount of time a user needs to be inactive to be forced to sign in again. Use 0 for never."
-                    actions={
-                      <span className="mr-3 text-foreground-lighter">
-                        <HoursOrNeverText value={values.SESSIONS_INACTIVITY_TIMEOUT} />
-                      </span>
+                </CardContent>
+                <CardFooter className="justify-end space-x-2">
+                  {accessTokenForm.formState.isDirty && (
+                    <Button variant="default" onClick={() => accessTokenForm.reset()}>
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    disabled={
+                      !canUpdateConfig ||
+                      isUpdatingAccessToken ||
+                      !accessTokenForm.formState.isDirty
                     }
-                    disabled={!canUpdateConfig || !isProPlanAndUp}
+                    loading={isUpdatingAccessToken}
+                  >
+                    Save changes
+                  </Button>
+                </CardFooter>
+              </Card>
+            </form>
+          </Form>
+        </PageSectionContent>
+      </PageSection>
+
+      <PageSection>
+        <PageSectionMeta>
+          <PageSectionSummary>
+            <PageSectionTitle>Refresh Tokens</PageSectionTitle>
+          </PageSectionSummary>
+        </PageSectionMeta>
+        <PageSectionContent>
+          <Form {...refreshTokenForm}>
+            <form
+              onSubmit={refreshTokenForm.handleSubmit(onSubmitRefreshTokens)}
+              className="space-y-4"
+            >
+              <Card>
+                <CardContent>
+                  <FormField
+                    control={refreshTokenForm.control}
+                    name="REFRESH_TOKEN_ROTATION_ENABLED"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Detect and revoke potentially compromised refresh tokens"
+                        description="Prevent replay attacks from potentially compromised refresh tokens."
+                      >
+                        <FormControl>
+                          <Switch
+                            checked={field.value}
+                            onCheckedChange={field.onChange}
+                            disabled={!canUpdateConfig}
+                          />
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
                   />
-                </FormSectionContent>
-              </FormSection>
-            </FormPanel>
-          </>
-        )
-      }}
-    </Form>
+                </CardContent>
+                <CardContent>
+                  <FormField
+                    control={refreshTokenForm.control}
+                    name="SECURITY_REFRESH_TOKEN_REUSE_INTERVAL"
+                    render={({ field }) => (
+                      <FormItemLayout
+                        layout="flex-row-reverse"
+                        label="Refresh token reuse interval"
+                        description="Time interval where the same refresh token can be used multiple times to request for an access token. Recommendation: 10 seconds."
+                      >
+                        <FormControl className="w-full">
+                          <InputGroup>
+                            <FormInputGroupInput
+                              type="number"
+                              min={0}
+                              {...field}
+                              disabled={!canUpdateConfig}
+                            />
+                            <InputGroupAddon align="inline-end">
+                              <InputGroupText>seconds</InputGroupText>
+                            </InputGroupAddon>
+                          </InputGroup>
+                        </FormControl>
+                      </FormItemLayout>
+                    )}
+                  />
+                </CardContent>
+                <CardFooter className="justify-end space-x-2">
+                  {refreshTokenForm.formState.isDirty && (
+                    <Button variant="default" onClick={() => refreshTokenForm.reset()}>
+                      Cancel
+                    </Button>
+                  )}
+                  <Button
+                    variant="primary"
+                    type="submit"
+                    disabled={
+                      !canUpdateConfig ||
+                      isUpdatingRefreshTokens ||
+                      !refreshTokenForm.formState.isDirty
+                    }
+                    loading={isUpdatingRefreshTokens}
+                  >
+                    Save changes
+                  </Button>
+                </CardFooter>
+              </Card>
+            </form>
+          </Form>
+        </PageSectionContent>
+      </PageSection>
+    </>
   )
 }
-
-export default SessionsAuthSettingsForm

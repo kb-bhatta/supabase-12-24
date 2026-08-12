@@ -80,8 +80,13 @@ An unenroll flow provides a UI for users to manage and unenroll factors linked t
 
 When a user unenrolls a factor, call `supabase.auth.mfa.unenroll()` with the ID of the factor. For example, call:
 
-```
-supabase.auth.mfa.unenroll({factorId: "d30fd651-184e-4748-a928-0a4b9be1d429"})
+```js
+import { createClient } from '@supabase/supabase-js'
+
+const supabase = createClient('https://your-project-id.supabase.co', 'sb_publishable_...')
+
+// ---cut---
+supabase.auth.mfa.unenroll({ factorId: 'd30fd651-184e-4748-a928-0a4b9be1d429' })
 ```
 
 to unenroll a factor with ID `d30fd651-184e-4748-a928-0a4b9be1d429`.
@@ -122,7 +127,7 @@ Unenrolling a factor will downgrade the assurance level from `aal2` to `aal1` on
 
 ```tsx
 /**
- * UnenrollMFA shows a simple table with the list of factors together with a button to unenroll.
+ * UnenrollMFA shows a table with the list of factors together with a button to unenroll.
  * When a user types in the factorId of the factor that they wish to unenroll and clicks unenroll
  * the corresponding factor will be unenrolled.
  */
@@ -175,7 +180,7 @@ Your app should sufficiently deny or allow access to tables or rows based on the
 
 <Admonition type="caution">
 
-PostgreSQL has two types of policies: permissive and restrictive. This guide uses restrictive policies. Make sure you don't omit the `as restrictive` clause.
+Postgres has two types of policies: permissive and restrictive. This guide uses restrictive policies. Make sure you don't omit the `as restrictive` clause.
 
 </Admonition>
 
@@ -219,7 +224,7 @@ create policy "Policy name."
 - The policy will accept both `aal1` and `aal2` for users with a `created_at`
   timestamp prior to 12th December 2022 at 00:00 UTC, but will only accept
   `aal2` for all other timestamps.
-- The `<@` operator is PostgreSQL's ["contained in"
+- The `<@` operator is Postgres's ["contained in"
   operator.](https://www.postgresql.org/docs/current/functions-array.html)
 - **Using `as restrictive` ensures this policy will restrict all commands on the
   table regardless of other policies!**
@@ -249,14 +254,14 @@ create policy "Policy name."
 - The policy will only accept only `aal2` when the user has at least one MFA
   factor verified.
 - Otherwise, it will accept both `aal1` and `aal2`.
-- The `<@` operator is PostgreSQL's ["contained in"
+- The `<@` operator is Postgres's ["contained in"
   operator.](https://www.postgresql.org/docs/current/functions-array.html)
 - **Using `as restrictive` ensures this policy will restrict all commands on the
   table regardless of other policies!**
 
 ### Server-Side Rendering
 
-<Admonition type="tip">
+<Admonition type="note">
 
 When using the Supabase JavaScript library in a server-side rendering context, make sure you always create a new object for each request! This will prevent you from accidentally rendering and serving content belonging to different users.
 
@@ -266,7 +271,7 @@ It is possible to enforce MFA on the Server-Side Rendering level. However, this 
 
 You can use the `supabase.auth.mfa.getAuthenticatorAssuranceLevel()` and `supabase.auth.mfa.listFactors()` APIs to identify the AAL level of the session and any factors that are enabled for a user, similar to how you would use these on the browser.
 
-However, encountering a different AAL level on the server may not actually be a security problem. Consider these likely scenarios:
+However, encountering a different AAL level on the server may not be a security problem. Consider these likely scenarios:
 
 1. User signed-in with a conventional method but closed their tab on the MFA
    flow.
@@ -275,11 +280,11 @@ However, encountering a different AAL level on the server may not actually be a 
 3. User has lost their authenticator device and is confused about the next
    steps.
 
-We thus recommend you redirect users to a page where they can authenticate using their additional factor, instead of rendering a HTTP 401 Unauthorized or HTTP 403 Forbidden content.
+We thus recommend you redirect users to a page where they can authenticate using their additional factor, instead of rendering an HTTP 401 Unauthorized or HTTP 403 Forbidden content.
 
 ### APIs
 
-If your application uses the Supabase Database, Storage or Edge Functions, just using Row Level Security policies will give you sufficient protection. In the event that you have other APIs that you wish to protect, follow these general guidelines:
+If your application uses the Supabase Database, Storage or Edge Functions, Row Level Security policies provide sufficient protection. In the event that you have other APIs that you wish to protect, follow these general guidelines:
 
 1. **Use a good JWT verification and parsing library for your language.**
    This will let you securely parse JWTs and extract their claims.
@@ -295,7 +300,6 @@ If your application uses the Supabase Database, Storage or Edge Functions, just 
 
 <Accordion
   type="default"
-  openBehaviour="multiple"
   chevronAlign="right"
   justified
   size="medium"
@@ -303,7 +307,7 @@ If your application uses the Supabase Database, Storage or Edge Functions, just 
 >
 
 <AccordionItem
-header={<span className="text-foreground">How do I check when a user went through MFA?</span>}
+header="How do I check when a user went through MFA?"
 id="how-do-i-check-when-a-user-went-through-mfa"
 >
 
@@ -328,7 +332,7 @@ For example, the following structure describes a user that first signed in with 
 
 Use the `supabase.auth.mfa.getAuthenticatorAssuranceLevel()` method to get easy access to this information in your browser app.
 
-You can use this PostgreSQL snippet in RLS policies, too:
+You can use this Postgres snippet in RLS policies, too:
 
 ```sql
 jsonb_path_query((select auth.jwt()), '$.amr[0]')

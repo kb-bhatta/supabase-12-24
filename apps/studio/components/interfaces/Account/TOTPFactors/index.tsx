@@ -1,26 +1,24 @@
 import dayjs from 'dayjs'
-import { AlertCircle } from 'lucide-react'
 import { useState } from 'react'
+import { Button } from 'ui'
+import { GenericSkeletonLoader } from 'ui-patterns/ShimmeringLoader'
 
-import AlertError from 'components/ui/AlertError'
-import { GenericSkeletonLoader } from 'components/ui/ShimmeringLoader'
-import { useMfaListFactorsQuery } from 'data/profile/mfa-list-factors-query'
-import { DATETIME_FORMAT } from 'lib/constants'
-import { AlertDescription_Shadcn_, AlertTitle_Shadcn_, Alert_Shadcn_, Button } from 'ui'
-import AddNewFactorModal from './AddNewFactorModal'
+import { AddNewFactorModal } from './AddNewFactorModal'
 import DeleteFactorModal from './DeleteFactorModal'
+import { AlertError } from '@/components/ui/AlertError'
+import { useMfaListFactorsQuery } from '@/data/profile/mfa-list-factors-query'
+import { DATETIME_FORMAT } from '@/lib/constants'
 
-const TOTPFactors = () => {
+export const TOTPFactors = () => {
   const [isAddNewFactorOpen, setIsAddNewFactorOpen] = useState(false)
   const [factorToBeDeleted, setFactorToBeDeleted] = useState<string | null>(null)
-  const { data, isLoading, isError, isSuccess, error } = useMfaListFactorsQuery()
+  const { data, isPending: isLoading, isError, isSuccess, error } = useMfaListFactorsQuery()
 
   return (
     <>
       <section className="space-y-3">
         <p className="text-sm text-foreground-light">
-          Generate one-time passwords via authenticator apps like 1Password, Authy, etc. as a second
-          factor to verify your identity during sign-in.
+          Use an authenticator app (like Google Authenticator or 1Password) to protect your account.
         </p>
         <div>
           {isLoading && <GenericSkeletonLoader />}
@@ -29,17 +27,6 @@ const TOTPFactors = () => {
           )}
           {isSuccess && (
             <>
-              {data.totp.length === 1 && (
-                <Alert_Shadcn_ variant="default" className="mb-2">
-                  <AlertCircle className="h-4 w-4" />
-                  <AlertTitle_Shadcn_>
-                    We recommend configuring two authenticator apps across different devices
-                  </AlertTitle_Shadcn_>
-                  <AlertDescription_Shadcn_ className="flex flex-col gap-3">
-                    The two authenticator apps will serve as a backup for each other.
-                  </AlertDescription_Shadcn_>
-                </Alert_Shadcn_>
-              )}
               <div>
                 {data.totp.map((factor) => {
                   return (
@@ -50,11 +37,11 @@ const TOTPFactors = () => {
                       </p>
                       <div className="flex items-center gap-4">
                         <p className="text-sm text-foreground-light">
-                          Added on {dayjs(factor.updated_at).format(DATETIME_FORMAT)}
+                          Added on {dayjs(factor.created_at).format(DATETIME_FORMAT)}
                         </p>
                         <Button
                           size="tiny"
-                          type="default"
+                          variant="default"
                           onClick={() => setFactorToBeDeleted(factor.id)}
                         >
                           Remove
@@ -88,5 +75,3 @@ const TOTPFactors = () => {
     </>
   )
 }
-
-export default TOTPFactors

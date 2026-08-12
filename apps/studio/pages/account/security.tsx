@@ -1,72 +1,83 @@
-import { Smartphone } from 'lucide-react'
-
-import { TOTPFactors } from 'components/interfaces/Account'
-import AccountLayout from 'components/layouts/AccountLayout/AccountLayout'
+import { Lock } from 'lucide-react'
+import { Badge, Card, CardContent, CardHeader } from 'ui'
+import { Admonition } from 'ui-patterns/Admonition'
+import { PageContainer } from 'ui-patterns/PageContainer'
 import {
-  ScaffoldContainer,
-  ScaffoldDescription,
-  ScaffoldHeader,
-  ScaffoldTitle,
-} from 'components/layouts/Scaffold'
-import { useMfaListFactorsQuery } from 'data/profile/mfa-list-factors-query'
-import type { NextPageWithLayout } from 'types'
-import { Badge, cn, Collapsible } from 'ui'
+  PageHeader,
+  PageHeaderDescription,
+  PageHeaderMeta,
+  PageHeaderSummary,
+  PageHeaderTitle,
+} from 'ui-patterns/PageHeader'
 
-const collapsibleClasses = [
-  'bg-surface-100',
-  'hover:bg-overlay-hover',
-  'data-open:bg-selection',
-  'border-default',
-  'hover:border-strong data-open:border-strong',
-  'data-open:pb-px col-span-12 rounded',
-  '-space-y-px overflow-hidden',
-  'border shadow',
-  'transition',
-  'hover:z-50',
-]
+import { TOTPFactors } from '@/components/interfaces/Account/TOTPFactors'
+import AccountLayout from '@/components/layouts/AccountLayout/AccountLayout'
+import { AppLayout } from '@/components/layouts/AppLayout/AppLayout'
+import { DefaultLayout } from '@/components/layouts/DefaultLayout'
+import { UnknownInterface } from '@/components/ui/UnknownInterface'
+import { useMfaListFactorsQuery } from '@/data/profile/mfa-list-factors-query'
+import { useIsFeatureEnabled } from '@/hooks/misc/useIsFeatureEnabled'
+import type { NextPageWithLayout } from '@/types'
 
 const Security: NextPageWithLayout = () => {
-  const { data } = useMfaListFactorsQuery()
+  const showSecuritySettings = useIsFeatureEnabled('account:show_security_settings')
+
+  const { data } = useMfaListFactorsQuery({ enabled: showSecuritySettings })
+
+  if (!showSecuritySettings) {
+    return <UnknownInterface urlBack={`/account/me`} />
+  }
 
   return (
-    <ScaffoldContainer>
-      <ScaffoldHeader>
-        <ScaffoldTitle>Multi-Factor Authentication</ScaffoldTitle>
-        <ScaffoldDescription>
-          Add an additional layer of security to your account by requiring more than just a password
-          to sign in.
-        </ScaffoldDescription>
-      </ScaffoldHeader>
-      <Collapsible className={cn(collapsibleClasses)}>
-        <Collapsible.Trigger asChild>
-          <button
-            type="button"
-            className="group flex w-full items-center justify-between rounded py-3 px-4 md:px-6 text-foreground"
-          >
-            <div className="flex flex-row gap-4 items-center py-1">
-              <Smartphone strokeWidth={1.5} />
-              <span className="text-sm">Authenticator app</span>
+    <>
+      <PageHeader size="small">
+        <PageHeaderMeta>
+          <PageHeaderSummary>
+            <PageHeaderTitle>Security</PageHeaderTitle>
+            <PageHeaderDescription>
+              Manage your account security settings and authentication methods.
+            </PageHeaderDescription>
+          </PageHeaderSummary>
+        </PageHeaderMeta>
+      </PageHeader>
+      <PageContainer size="small">
+        {data?.totp.length === 1 && (
+          <Admonition
+            className="mt-8"
+            type="danger"
+            layout="horizontal"
+            title="Avoid being locked out"
+            description="Add a backup sign-in method now. Otherwise, losing access to your authenticator app will permanently lock you out of your account."
+          />
+        )}
+        <Card className="mt-8">
+          <CardHeader className="py-3 flex flex-row items-center justify-between">
+            <div className="flex flex-row gap-4 items-center py-1 mb-0">
+              <Lock size={18} strokeWidth={1.5} />
+              <span className="text-sm">Multi-factor authentication (MFA)</span>
             </div>
 
             {data ? (
-              <Badge variant={data.totp.length === 0 ? 'default' : 'brand'}>
+              <Badge variant={data.totp.length === 0 ? 'default' : 'success'}>
                 {data.totp.length} app{data.totp.length === 1 ? '' : 's'} configured
               </Badge>
             ) : null}
-          </button>
-        </Collapsible.Trigger>
-        <Collapsible.Content className="group border-t border-default bg-surface-100 py-6 px-4 md:px-6 text-foreground">
-          <TOTPFactors />
-        </Collapsible.Content>
-      </Collapsible>
-    </ScaffoldContainer>
+          </CardHeader>
+          <CardContent>
+            <TOTPFactors />
+          </CardContent>
+        </Card>
+      </PageContainer>
+    </>
   )
 }
 
 Security.getLayout = (page) => (
-  <AccountLayout title="Security" breadcrumbs={[{ key: 'security', label: 'Security' }]}>
-    {page}
-  </AccountLayout>
+  <AppLayout>
+    <DefaultLayout headerTitle="Account">
+      <AccountLayout title="Security">{page}</AccountLayout>
+    </DefaultLayout>
+  </AppLayout>
 )
 
 export default Security

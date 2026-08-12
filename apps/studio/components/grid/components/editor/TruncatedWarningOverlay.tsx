@@ -1,4 +1,4 @@
-import { MAX_CHARACTERS } from 'data/table-rows/table-rows-query'
+import { MAX_CHARACTERS } from '@supabase/pg-meta/src/query/table-row-query'
 import { Button, cn } from 'ui'
 
 export const TruncatedWarningOverlay = ({
@@ -22,7 +22,7 @@ export const TruncatedWarningOverlay = ({
           You may try to render the entire value, but your browser may run into performance issues
         </p>
       </div>
-      <Button type="default" loading={isLoading} onClick={loadFullValue}>
+      <Button variant="default" loading={isLoading} onClick={loadFullValue}>
         Load full value
       </Button>
     </div>

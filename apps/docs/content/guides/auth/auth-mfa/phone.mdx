@@ -12,21 +12,36 @@ The phone messaging configuration for MFA is shared with [phone auth login](/doc
 
 Below is a flow chart illustrating how the Enrollment and Verify APIs work in the context of MFA (Phone).
 
-<Image
-  alt="Diagram showing the flow of Multi-Factor authentication"
-  src={{
-    light: '/docs/img/guides/auth-mfa/auth-mfa-phone-flow.svg',
-    dark: '/docs/img/guides/auth-mfa/auth-mfa-phone-flow.svg',
-  }}
-  containerClassName="max-w-[700px]"
-/>
+```mermaid
+flowchart TD
+  InitS((Setup flow)) --> SAAL1[/Session is AAL1/]
+  SAAL1 --> Enroll[Enroll API]
+  Enroll --> ChallengeAPI[Challenge API]
+  ChallengeAPI --> Scan[/Code sent to User/]
+  Scan --> Enter[User: Enter code]
+  Enter --> Verify[Verify API]
+  Verify --> Check{{Is code correct?}}
+  Check -->|Yes| AAL2[/Upgrade to AAL2/]
+  AAL2 --> Done((Done))
+  Check -->|No| Enter
+  InitA((Login flow)) --> SignIn([User: Sign-in])
+  SignIn --> AAL1[/Upgrade to AAL1/]
+  AAL1 --> ListFactors[List Factors API]
+  ListFactors -->|1 or more factors| OpenAuth([User: Select phone factor])
+  OpenAuth --> Enter
+  ListFactors -->|0 factors| Setup[[Setup flow]]
+```
+
+In the **setup flow**, a session already at AAL1 calls the Enroll API followed by the Challenge API, which sends a code to the user over SMS or WhatsApp. The user enters the code, the Verify API checks it, and on success the session is upgraded to AAL2. An incorrect code returns the user to the code-entry step.
+
+In the **login flow**, the user signs in (upgrading the session to AAL1) and the List Factors API is called. If the user has one or more factors, they select their phone factor and enter the code that was sent, following the same Verify path to reach AAL2. If they have no factors enrolled, they are sent through the setup flow first.
 
 ### Add enrollment flow
 
 An enrollment flow provides a UI for users to set up additional authentication factors. Most applications add the enrollment flow in two places within their app:
 
 1. Right after login or sign up.
-   This allows users quickly set up Multi Factor Authentication (MFA) post login or account creation. Where possible, encourage all users to set up MFA. Many applications offer this as an opt-in step in an
+   This allows users to set up Multi Factor Authentication (MFA) post login or account creation. Where possible, encourage all users to set up MFA. Many applications offer this as an opt-in step in an
    effort to reduce onboarding friction.
 2. From within a settings page.
    Allows users to set up, disable or modify their MFA settings.
@@ -306,12 +321,10 @@ function AuthMFA() {
 
 ### Security configuration
 
-Each code is valid for up to 5 minutes, after which a new one can be sent. Successive codes remain valid until expiry. When possible choose the longest code length acceptable to your use case, at a minimum of 6. This can be configured in the [Authentication Settings](/dashboard/project/_/settings/auth).
+Each code is valid for up to 5 minutes, after which a new one can be sent. Successive codes remain valid until expiry. When possible choose the longest code length acceptable to your use case, at a minimum of 6. This can be configured in the [Authentication Settings](/dashboard/project/_/auth/mfa).
 
-Please be aware that Phone MFA is vulnerable to SIM swap attacks where an attacker will call a mobile provider and ask to port the target's phone number to a new SIM card and then use the said SIM card to intercept an MFA code. Please evaluate the your application's tolerance for such an attack. You can read more about SIM swapping attacks [here](https://en.wikipedia.org/wiki/SIM_swap_scam)
+Be aware that Phone MFA is vulnerable to SIM swap attacks where an attacker will call a mobile provider and ask to port the target's phone number to a new SIM card and then use the said SIM card to intercept an MFA code. Evaluate the your application's tolerance for such an attack. You can read more about SIM swapping attacks [here](https://en.wikipedia.org/wiki/SIM_swap_scam)
 
-## Pricing
-
-<PricingMfaPhone />
-
-For a detailed breakdown of how charges are calculated, refer to [Manage Advanced MFA Phone usage](/docs/guides/platform/manage-your-usage/advanced-mfa-phone).
+<$Show if="billing:all">
+<$Partial path="billing/pricing/pricing_mfa_phone.mdx" />
+</$Show>

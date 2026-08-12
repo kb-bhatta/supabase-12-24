@@ -11,7 +11,6 @@ import StorageVisual from './StorageVisual'
 import VectorVisual from './VectorVisual'
 
 import { PRODUCT_MODULES_SHORTNAMES, PRODUCT_SHORTNAMES } from 'shared-data/products'
-import { TelemetryActions } from 'common/telemetry-constants'
 import { useSendTelemetryEvent } from '~/lib/telemetry'
 
 import type { ProductType } from '~/data/MainProducts'
@@ -27,13 +26,13 @@ const Products: React.FC<Props> = (props) => {
     product: PRODUCT_SHORTNAMES | PRODUCT_MODULES_SHORTNAMES | 'data-api'
   ) => {
     return await _sendTelemetryEvent({
-      action: TelemetryActions.HOMEPAGE_PRODUCT_CARD_CLICKED,
+      action: 'homepage_product_card_clicked',
       properties: { product },
     })
   }
 
   return (
-    <SectionContainer className="!pt-0 grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-4 xl:gap-3 2xl:gap-6 md:grid-cols-12">
+    <SectionContainer className="pt-0! grid grid-cols-1 gap-4 sm:grid-cols-2 md:gap-4 xl:gap-3 2xl:gap-6 md:grid-cols-12">
       <ProductCard
         isDatabase
         className="col-span-6 md:col-span-12 xl:col-span-6"
@@ -119,9 +118,9 @@ const Products: React.FC<Props> = (props) => {
         onClick={() => sendTelemetryEvent(PRODUCT_SHORTNAMES.REALTIME)}
         image={<RealtimeVisual className="hidden sm:block" />}
         className="
-          col-span-6 pointer-events-none xl:col-span-3
-          hover:!cursor-[url('/images/index/products/realtime-cursor-light.svg'),_auto]
-          dark:hover:!cursor-[url('/images/index/products/realtime-cursor-dark.svg'),_auto]
+          col-span-6 xl:col-span-3
+          hover:cursor-[url('/images/index/products/realtime-cursor-light.svg'),auto]!
+          dark:hover:cursor-[url('/images/index/products/realtime-cursor-dark.svg'),auto]!
         "
       />
       <ProductCard

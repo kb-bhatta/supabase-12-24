@@ -1,6 +1,4 @@
 export const configKeys = {
-  pgBouncerStatus: (projectRef: string | undefined) =>
-    ['projects', projectRef, 'pgbouncer'] as const,
   settings: (projectRef: string | undefined) => ['projects', projectRef, 'settings'] as const,
   settingsV2: (projectRef: string | undefined) => ['projects', projectRef, 'settings-v2'] as const,
   api: (projectRef: string | undefined) => ['projects', projectRef, 'settings', 'api'] as const,
@@ -28,4 +26,7 @@ export const configKeys = {
     ['projects', projectRef, 'available-unpause-versions'] as const,
   diskAutoscaleConfig: (projectRef: string | undefined) =>
     ['projects', projectRef, 'disk-autoscale-config'] as const,
+  deploymentMode: () => ['deployment-mode'] as const,
+  postgresConfig: (projectRef: string | undefined) =>
+    ['projects', projectRef, 'postgres-config'] as const,
 }

@@ -1,104 +1,28 @@
-import { authKeys } from 'data/auth/keys'
-import { databaseExtensionsKeys } from 'data/database-extensions/keys'
-import { databasePoliciesKeys } from 'data/database-policies/keys'
-import { databaseTriggerKeys } from 'data/database-triggers/keys'
-import { databaseKeys } from 'data/database/keys'
-import { enumeratedTypesKeys } from 'data/enumerated-types/keys'
-import { tableKeys } from 'data/tables/keys'
-import { CommonDatabaseEntity } from 'state/app-state'
-import { SupportedAssistantEntities } from './AIAssistant.types'
+import { isToolUIPart, type UIMessage } from 'ai'
+import { toast } from 'sonner'
+
 import { SAFE_FUNCTIONS } from './AiAssistant.constants'
+import {
+  isLogsSource,
+  sqlSourceToFenceLanguage,
+} from '@/components/interfaces/SQLEditor/querySource'
+import { authKeys } from '@/data/auth/keys'
+import { databaseExtensionsKeys } from '@/data/database-extensions/keys'
+import { databaseIndexesKeys } from '@/data/database-indexes/keys'
+import { databasePoliciesKeys } from '@/data/database-policies/keys'
+import { databaseTriggerKeys } from '@/data/database-triggers/keys'
+import { databaseKeys } from '@/data/database/keys'
+import { enumeratedTypesKeys } from '@/data/enumerated-types/keys'
+import { handleError } from '@/data/fetchers'
+import { tableKeys } from '@/data/tables/keys'
+import { tryParseJson } from '@/lib/helpers'
+import type { SqlSnippet } from '@/state/ai-assistant-state'
+import { ResponseError } from '@/types'
 
-const PLACEHOLDER_PREFIX = `-- Press tab to use this code
-\n&nbsp;\n`
-
-// [Joshen] Not used but keeping this for now in case we do an inline editor
-export const generatePlaceholder = (
-  editor?: SupportedAssistantEntities | null,
-  entity?: CommonDatabaseEntity,
-  existingDefinition?: string
-) => {
-  switch (editor) {
-    case 'functions':
-      if (entity === undefined) {
-        return `${PLACEHOLDER_PREFIX}
-CREATE FUNCTION *schema*.*function_name*(*param1 type*, *param2 type*)\n
-&nbsp;&nbsp;RETURNS *return_type*\n
-&nbsp;&nbsp;LANGUAGE *plpgsql*\n
-&nbsp;&nbsp;SECURITY DEFINER\n
-&nbsp;&nbsp;SET *search_path = ''*\n
-AS $$\n
-DECLARE\n
-&nbsp;&nbsp;*-- Variable declarations*\n
-BEGIN\n
-&nbsp;&nbsp;*-- Function logic*\n
-END;\n
-$$;
-`
-      } else {
-        return `${PLACEHOLDER_PREFIX}
--- To rename the function\n
-ALTER FUNCTION *${entity.name}* RENAME TO *new_name*;\n
-&nbsp;\n
--- To change the schema of the function\n
-ALTER FUNCTION *${entity.name}* SET SCHEMA *new_schema*;\n
-&nbsp;\n
--- To update the function body or the arguments, use\n
--- the create or replace statement instead\n
-${existingDefinition
-  ?.replaceAll(
-    '\n ',
-    `\n\
-  &nbsp;&nbsp;`
-  )
-  .replaceAll('\n', '\n\n')
-  .trim()}
-`
-      }
-    case 'rls-policies':
-      if (entity === undefined) {
-        return `${PLACEHOLDER_PREFIX}
-CREATE POLICY *name* ON *table_name*\n
-AS PERMISSIVE -- PERMISSIVE | RESTRICTIVE\n
-FOR ALL -- ALL | SELECT | INSERT | UPDATE | DELETE\n
-TO *role_name* -- Default: public\n
-USING ( *using_expression* )\n
-WITH CHECK ( *check_expression* );
-`
-      } else {
-        let expression = ''
-        if (entity.definition !== null && entity.definition !== undefined) {
-          expression += `USING ( *${entity.definition}* )${
-            entity.check === null || entity.check === undefined ? ';' : ''
-          }\n`
-        }
-        if (entity.check !== null && entity.check !== undefined) {
-          expression += `WITH CHECK ( *${entity.check}* );\n`
-        }
-        return `${PLACEHOLDER_PREFIX}
-BEGIN;\n
-&nbsp;\n
--- To update your policy definition\n
-ALTER POLICY "${entity.name}"\n
-ON "${entity.schema}"."${entity.table}"\n
-TO *${(entity.roles ?? []).join(', ')}*\n
-${expression}
-&nbsp;\n
--- To rename the policy\n
-ALTER POLICY "${entity.name}"\n
-ON "${entity.schema}"."${entity.table}"\n
-RENAME TO "*New Policy Name*";\n
-&nbsp;\n
-COMMIT;
-`
-      }
-    default:
-      return undefined
-  }
-}
+export type MutationCategory = 'functions' | 'rls-policies'
 
 // [Joshen] This is just very basic identification, but possible can extend perhaps
-export const identifyQueryType = (query: string) => {
+export const identifyQueryType = (query: string): MutationCategory | undefined => {
   const formattedQuery = query.toLowerCase().replaceAll('\n', ' ')
   if (
     formattedQuery.includes('create function') ||
@@ -108,9 +32,11 @@ export const identifyQueryType = (query: string) => {
   } else if (formattedQuery.includes('create policy') || formattedQuery.includes('alter policy')) {
     return 'rls-policies'
   }
+  return undefined
 }
 
 // Check for function calls that aren't in the safe list
+/** @deprecated [Joshen] Ideally we move away from this as this isn't a scalable way to deduce */
 export const containsUnknownFunction = (query: string) => {
   const normalizedQuery = query.trim().toLowerCase()
   const functionCallRegex = /\w+\s*\(/g
@@ -122,6 +48,11 @@ export const containsUnknownFunction = (query: string) => {
   })
 }
 
+/** @deprecated
+ * [Joshen] This isn't really a scalable way to reduce this behaviour, we now have support
+ * for a readonly connection string which we can use this to run queries, and is a much
+ * clearer way to deduce if the query is read only or not
+ */
 export const isReadOnlySelect = (query: string): boolean => {
   const normalizedQuery = query.trim().toLowerCase()
 
@@ -150,8 +81,38 @@ export const isReadOnlySelect = (query: string): boolean => {
   return true
 }
 
+export const hasPendingToolApproval = (messages: Pick<UIMessage, 'role' | 'parts'>[]) => {
+  return messages.some((message) => {
+    if (message.role !== 'assistant') return false
+
+    return message.parts?.some((part) => isToolUIPart(part) && part.state === 'approval-requested')
+  })
+}
+
+export const resolvePendingToolApprovalsAsDenied = (messages: UIMessage[]): UIMessage[] => {
+  return messages.map((message) => {
+    if (message.role !== 'assistant') return message
+
+    const parts = message.parts?.map((part) => {
+      if (!isToolUIPart(part) || part.state !== 'approval-requested') return part
+
+      return {
+        ...part,
+        state: 'output-denied',
+        approval: {
+          id: part.approval.id,
+          approved: false,
+          reason: 'Skipped because the user sent a follow-up message.',
+        },
+      } as UIMessage['parts'][number]
+    })
+
+    return { ...message, parts } as UIMessage
+  })
+}
+
 const getContextKey = (pathname: string) => {
-  const [_, __, ___, ...rest] = pathname.split('/')
+  const [, , , ...rest] = pathname.split('/')
   const key = rest.join('/')
   return key
 }
@@ -171,14 +132,73 @@ export const getContextualInvalidationKeys = ({
     (
       {
         'auth/users': [authKeys.usersInfinite(ref)],
-        'auth/policies': [databasePoliciesKeys.list(ref)],
+        'database/policies': [databasePoliciesKeys.list(ref)],
         'database/functions': [databaseKeys.databaseFunctions(ref)],
-        'database/tables': [tableKeys.list(ref, schema, true), tableKeys.list(ref, schema, false)],
+        'database/tables': [
+          tableKeys.list(ref, schema, { includeColumns: true }),
+          tableKeys.list(ref, schema, { includeColumns: false }),
+        ],
         'database/triggers': [databaseTriggerKeys.list(ref)],
         'database/types': [enumeratedTypesKeys.list(ref)],
         'database/extensions': [databaseExtensionsKeys.list(ref)],
-        'database/indexes': [databaseKeys.indexes(ref, schema)],
+        'database/indexes': [databaseIndexesKeys.list(ref, schema)],
       } as const
     )[key] ?? []
   )
+}
+
+export const onErrorChat = (error: Error) => {
+  const parsedError = error ? tryParseJson(error.message) : undefined
+
+  try {
+    handleError(parsedError?.error || parsedError || error)
+  } catch (e: any) {
+    if (e instanceof ResponseError) {
+      toast.error(e.message)
+    } else if (e instanceof Error) {
+      toast.error(e.message)
+    } else if (typeof e === 'string') {
+      toast.error(e)
+    } else {
+      toast.error('An unknown error occurred')
+    }
+  }
+}
+
+export function containsLogsSnippets(snippets: readonly SqlSnippet[] | undefined): boolean {
+  return (snippets ?? []).some(
+    (snippet) => typeof snippet !== 'string' && isLogsSource(snippet.source)
+  )
+}
+
+export const getSnippetLabel = (snippet: SqlSnippet, index: number): string =>
+  typeof snippet === 'string' ? `Snippet ${index + 1}` : snippet.label
+
+export const getSnippetContent = (snippet: SqlSnippet): string =>
+  typeof snippet === 'string' ? snippet : snippet.content
+
+/**
+ * The fence language an attached query is written into the message with. A logs query
+ * is fenced as `clickhouse` so the model can tell which attachment is ClickHouse
+ * against the `logs` table — a single message can carry both dialects.
+ *
+ * It also keeps the two apart in the rendered message: MessageMarkdown treats a `sql`
+ * fence as runnable Postgres (`DisplayBlockRenderer`, branded with `untrustedSql`),
+ * which a ClickHouse query must never be offered as.
+ */
+function getSnippetFenceLanguage(snippet: SqlSnippet): 'sql' | 'clickhouse' {
+  return sqlSourceToFenceLanguage(typeof snippet === 'string' ? undefined : snippet.source)
+}
+
+/**
+ * Renders attached queries as the fenced code blocks appended to the message text,
+ * each labelled with its own dialect.
+ */
+export function formatAttachedSnippets(snippets: readonly SqlSnippet[]): string {
+  return snippets
+    .map(
+      (snippet) =>
+        '```' + getSnippetFenceLanguage(snippet) + '\n' + getSnippetContent(snippet) + '\n```'
+    )
+    .join('\n')
 }

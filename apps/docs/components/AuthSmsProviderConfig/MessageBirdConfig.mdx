@@ -1,7 +1,7 @@
-import { CostWarning } from './AuthSmsProviderConfig.Warnings'
+import { Admonition } from 'ui-patterns/Admonition'
 
 <Admonition type="warning">
-    
+
 The MessageBird provider only works with the APIs before the [transition to Bird](https://bird.com/blog/messagebird-is-now-bird). If you are using a new Bird account, this provider will not work properly since it relies on using the old set of [MessageBird APIs](https://developers.messagebird.com/api/sms-messaging/).
 
 </Admonition>
@@ -13,8 +13,6 @@ You'll need:
 - A MessageBird account (sign up [here](https://dashboard.messagebird.com/en/sign-up))
 - A Supabase project (create one [here](https://supabase.com/dashboard))
 - A mobile phone capable of receiving SMS
-
-<CostWarning />
 
 ## Set up MessageBird as your SMS provider
 

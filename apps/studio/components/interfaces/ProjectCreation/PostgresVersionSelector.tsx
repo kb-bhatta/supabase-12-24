@@ -1,41 +1,53 @@
 import { useEffect } from 'react'
-import { ControllerRenderProps, UseFormReturn } from 'react-hook-form'
-
-import { components } from 'api-types'
-import {
-  ProjectCreationPostgresVersion,
-  useProjectCreationPostgresVersionsQuery,
-} from 'data/config/project-creation-postgres-versions-query'
+import { ControllerRenderProps, UseFormReturn, useWatch } from 'react-hook-form'
 import type { CloudProvider } from 'shared-data'
 import {
   Badge,
-  SelectContent_Shadcn_,
-  SelectGroup_Shadcn_,
-  SelectItem_Shadcn_,
-  SelectTrigger_Shadcn_,
-  SelectValue_Shadcn_,
-  Select_Shadcn_,
+  Select,
+  SelectContent,
+  SelectGroup,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
 } from 'ui'
 import { FormItemLayout } from 'ui-patterns/form/FormItemLayout/FormItemLayout'
 
-type ReleaseChannel = components['schemas']['ReleaseChannel']
-type PostgresEngine = components['schemas']['PostgresEngine']
+import { smartRegionToExactRegion } from './ProjectCreation.utils'
+import { useProjectCreationPostgresVersionsQuery } from '@/data/config/project-creation-postgres-versions-query'
+import { useProjectUnpausePostgresVersionsQuery } from '@/data/config/project-unpause-postgres-versions-query'
+import { PostgresEngine, ReleaseChannel } from '@/data/projects/new-project.constants'
+import { useSelectedProjectQuery } from '@/hooks/misc/useSelectedProject'
 
 interface PostgresVersionDetails {
-  postgresEngine: PostgresEngine | undefined
-  releaseChannel: ReleaseChannel | undefined
+  postgresEngine?: Exclude<PostgresEngine, '13' | '14'>
+  releaseChannel?: ReleaseChannel
 }
 
 interface PostgresVersionSelectorProps {
   cloudProvider: CloudProvider
   dbRegion: string
-  organizationSlug: string | undefined
+  disabled?: boolean
+  organizationSlug?: string
   field: ControllerRenderProps<any, 'postgresVersionSelection'>
   form: UseFormReturn<any>
+  /**
+   * Owned by the form owner (not this component) so the last valid selection
+   * survives this selector unmounting, e.g. when its collapsible section
+   * closes. Create it with useRef('') alongside the form.
+   */
+  lastValidSelectionRef: { current: string }
+  type?: 'create' | 'unpause'
   layout?: 'vertical' | 'horizontal'
+  label?: string
 }
 
-const formatValue = ({ postgres_engine, release_channel }: ProjectCreationPostgresVersion) => {
+const formatValue = ({
+  postgres_engine,
+  release_channel,
+}: {
+  postgres_engine: string
+  release_channel: string
+}) => {
   return `${postgres_engine}|${release_channel}`
 }
 
@@ -51,72 +63,122 @@ export const extractPostgresVersionDetails = (value: string): PostgresVersionDet
 export const PostgresVersionSelector = ({
   cloudProvider,
   dbRegion,
+  disabled = false,
   organizationSlug,
   field,
   form,
+  lastValidSelectionRef,
+  type = 'create',
   layout = 'horizontal',
+  label = 'Postgres version',
 }: PostgresVersionSelectorProps) => {
+  const { data: project } = useSelectedProjectQuery()
+
+  const dbRegionExact = smartRegionToExactRegion(dbRegion)
+
   const {
-    data,
-    isLoading: isLoadingProjectVersions,
+    data: createVersions,
+    isPending: isLoadingProjectCreateVersions,
     isSuccess,
-  } = useProjectCreationPostgresVersionsQuery({
-    cloudProvider,
-    dbRegion,
-    organizationSlug,
-  })
-  const availableVersions = (data?.available_versions ?? []).sort((a, b) =>
-    a.version.localeCompare(b.version)
+  } = useProjectCreationPostgresVersionsQuery(
+    {
+      cloudProvider,
+      dbRegion: dbRegionExact,
+      organizationSlug,
+    },
+    { enabled: type === 'create' }
   )
 
+  const { data: unpauseVersions, isPending: isLoadingProjectUnpauseVersions } =
+    useProjectUnpausePostgresVersionsQuery(
+      { projectRef: project?.ref },
+      { enabled: type === 'unpause' }
+    )
+
+  const versions =
+    type === 'create'
+      ? (createVersions?.available_versions ?? [])
+      : (unpauseVersions?.available_versions ?? [])
+  const availableVersions = versions.sort((a, b) => a.version.localeCompare(b.version)).reverse()
+  const postgresVersionSelection = useWatch({
+    control: form.control,
+    name: 'postgresVersionSelection',
+  })
+
+  // react-hook-form intermittently drops this field's value when its Controller
+  // remounts, so a one-shot "set the default once versions load" effect leaves
+  // the select stuck empty. Instead this effect re-asserts off the watched value:
+  // a selection present in the current list is kept (and remembered in the
+  // owner-held lastValidSelectionRef), and when the value is missing or cleared
+  // out from under us it restores the last valid selection, falling back to the
+  // GA default.
   useEffect(() => {
-    const defaultValue = availableVersions[0] ? formatValue(availableVersions[0]) : undefined
+    if (availableVersions.length === 0) return
+    const isSelectionAvailable = (selection: string) =>
+      availableVersions.some((version) => formatValue(version) === selection)
+
+    if (postgresVersionSelection && isSelectionAvailable(postgresVersionSelection)) {
+      lastValidSelectionRef.current = postgresVersionSelection
+      return
+    }
+
+    if (isSelectionAvailable(lastValidSelectionRef.current)) {
+      form.setValue('postgresVersionSelection', lastValidSelectionRef.current)
+      return
+    }
+
+    const gaVersion = availableVersions.find((x) => x.release_channel === 'ga')
+    const defaultValue = gaVersion ? formatValue(gaVersion) : formatValue(availableVersions[0])
     form.setValue('postgresVersionSelection', defaultValue)
-  }, [isSuccess, form])
+  }, [isSuccess, availableVersions, postgresVersionSelection, lastValidSelectionRef, form])
 
   return (
-    <FormItemLayout label="Postgres Version" layout={layout}>
-      <Select_Shadcn_
-        value={field.value}
+    <FormItemLayout id={field.name} label={label} layout={layout}>
+      <Select
+        value={postgresVersionSelection}
         onValueChange={field.onChange}
-        disabled={availableVersions.length <= 1 || isLoadingProjectVersions}
+        disabled={
+          disabled ||
+          availableVersions.length === 0 ||
+          (type === 'create' && isLoadingProjectCreateVersions) ||
+          (type === 'unpause' && isLoadingProjectUnpauseVersions)
+        }
       >
-        <SelectTrigger_Shadcn_ className="[&>:nth-child(1)]:w-full [&>:nth-child(1)]:flex [&>:nth-child(1)]:items-start">
-          <SelectValue_Shadcn_ placeholder="Select a Postgres version for your project" />
-        </SelectTrigger_Shadcn_>
-        <SelectContent_Shadcn_>
-          <SelectGroup_Shadcn_>
+        <SelectTrigger
+          id={field.name}
+          className="[&>:nth-child(1)]:w-full [&>:nth-child(1)]:flex [&>:nth-child(1)]:items-start"
+        >
+          <SelectValue placeholder="Select a Postgres version for your project" />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectGroup>
             {availableVersions.map((value) => {
               const postgresVersion = value.version
                 .split('supabase-postgres-')[1]
                 .replace('-orioledb', '')
               return (
-                <SelectItem_Shadcn_
+                <SelectItem
                   key={formatValue(value)}
                   value={formatValue(value)}
                   className="w-full [&>:nth-child(2)]:w-full"
                 >
                   <div className="flex flex-row items-center justify-between w-full">
                     <span className="text-foreground">{postgresVersion}</span>
-                    <div>
+                    <div className="flex flex-row gap-x-2">
                       {value.release_channel !== 'ga' && (
-                        <Badge variant="warning" className="mr-1 capitalize">
-                          {value.release_channel}
-                        </Badge>
+                        <Badge variant="warning">{value.release_channel}</Badge>
                       )}
                       {value.postgres_engine.includes('oriole') && (
-                        <Badge variant="default" className="mr-1">
-                          OrioleDB
-                        </Badge>
+                        <Badge variant="default">OrioleDB</Badge>
                       )}
                     </div>
                   </div>
-                </SelectItem_Shadcn_>
+                </SelectItem>
               )
             })}
-          </SelectGroup_Shadcn_>
-        </SelectContent_Shadcn_>
-      </Select_Shadcn_>
+          </SelectGroup>
+        </SelectContent>
+      </Select>
     </FormItemLayout>
   )
 }

@@ -1,26 +1,23 @@
 'use client'
 
 import { createClient } from '@supabase/supabase-js'
+import { IS_PLATFORM } from '~/lib/constants'
+import { useSendTelemetryEvent } from '~/lib/telemetry'
+import { gotrueClient, useConstant, useIsLoggedIn, type Database } from 'common'
 import { Check, MessageSquareQuote, X } from 'lucide-react'
 import { usePathname } from 'next/navigation'
 import {
-  type CSSProperties,
-  type MouseEventHandler,
   forwardRef,
   useReducer,
   useRef,
   useState,
+  type CSSProperties,
+  type MouseEventHandler,
 } from 'react'
-
-import { type Database, useConstant, useIsLoggedIn } from 'common'
-import { TelemetryActions } from 'common/telemetry-constants'
 import { Button, cn } from 'ui'
 
-import { IS_PLATFORM } from '~/lib/constants'
-import { useSendFeedbackMutation } from '~/lib/fetch/feedback'
-import { useSendTelemetryEvent } from '~/lib/telemetry'
-import { getNotionTeam, getSanitizedTabParams } from './Feedback.utils'
-import { type FeedbackFields, FeedbackModal } from './FeedbackModal'
+import { getSanitizedTabParams } from './Feedback.utils'
+import { FeedbackModal, type FeedbackFields } from './FeedbackModal'
 
 const FeedbackButton = forwardRef<
   HTMLButtonElement,
@@ -31,12 +28,13 @@ const FeedbackButton = forwardRef<
 
   return (
     <button
+      tabIndex={0}
       ref={ref}
       className={cn(
         'mt-0',
-        'flex items-center gap-2',
+        'flex items-center gap-1',
         'text-xs text-foreground-lighter',
-        'hover:text-foreground',
+        'hover:text-foreground text-left',
         !visible && 'opacity-0 invisible',
         '[transition-property:opacity,color]',
         '[transition-delay:700ms,0ms]'
@@ -80,13 +78,11 @@ function Feedback({ className }: { className?: string }) {
 
   const pathname = usePathname() ?? ''
   const sendTelemetryEvent = useSendTelemetryEvent()
-  const { mutate: sendFeedbackComment } = useSendFeedbackMutation()
+  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY
   const supabase = useConstant(() =>
-    IS_PLATFORM
-      ? createClient<Database>(
-          process.env.NEXT_PUBLIC_SUPABASE_URL!,
-          process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-        )
+    IS_PLATFORM && supabaseUrl && supabaseAnonKey
+      ? createClient<Database>(supabaseUrl, supabaseAnonKey)
       : undefined
   )
 
@@ -97,19 +93,16 @@ function Feedback({ className }: { className?: string }) {
   const showNo = unanswered || isNo
 
   async function sendFeedbackVote(response: Response) {
-    const { error } = await supabase.from('feedback').insert({
-      vote: response,
-      page: pathname,
-      metadata: {
-        query: getSanitizedTabParams(),
-      },
-    })
+    if (!supabase) return
+    const { error } = await supabase
+      .from('feedback')
+      .insert({ vote: response, page: pathname, metadata: { query: getSanitizedTabParams() } })
     if (error) console.error(error)
   }
 
   function handleVote(response: Response) {
     sendTelemetryEvent({
-      action: TelemetryActions.DOCS_FEEDBACK_CLICKED,
+      action: 'docs_feedback_clicked',
       properties: { response },
     })
     sendFeedbackVote(response)
@@ -128,86 +121,102 @@ function Feedback({ className }: { className?: string }) {
     }, 100)
   }
 
-  async function handleSubmit({ page, comment, title }: FeedbackFields) {
-    sendFeedbackComment({
-      message: comment,
-      pathname: page,
-      title,
-      // @ts-expect-error -- can't click this button without having a state.response
-      isHelpful: state.response === 'yes',
-      team: getNotionTeam(pathname),
-    })
+  async function handleSubmit({ comment, title }: FeedbackFields) {
+    if (supabase) {
+      const userId = (await gotrueClient.getSession()).data.session?.user?.id ?? null
+      const { error } = await supabase.from('feedback_comments').insert({
+        page: pathname,
+        // @ts-expect-error -- the comment modal only opens after a vote, so state.response is set
+        vote: state.response,
+        title,
+        comment,
+        user_id: userId,
+        metadata: { query: getSanitizedTabParams() },
+      })
+      if (error) console.error(error)
+    }
     setModalOpen(false)
     refocusButton()
   }
 
   return (
-    <section className={cn('@container px-5 mb-6', className)} aria-labelledby="feedback-title">
-      <h3 id="feedback-title" className="block font-mono text-xs uppercase text-foreground mb-4">
+    <section className={cn('@container', className)} aria-labelledby="feedback-title">
+      <h3 id="feedback-title" className="block font-mono text-xs text-foreground-light mb-3">
         Is this helpful?
       </h3>
-      <div className="relative flex flex-col gap-y-4 mb-2 @[12rem]:flex-row @[12rem]:items-center">
+      <div className="relative flex flex-col gap-2 @[12rem]:gap-4 @[12rem]:flex-row @[12rem]:items-center">
         <div
           style={{ '--container-flex-gap': '0.5rem' } as CSSProperties}
-          className={`relative flex gap-[var(--container-flex-gap)] items-center`}
+          className="relative flex gap-2 items-center"
         >
           <Button
-            type="outline"
+            variant="outline"
             rounded
             className={cn(
-              'px-1',
-              !isYes && 'hover:text-brand-600 hover:border-brand-500',
-              isYes && 'bg-brand text-brand-200 !border-brand disabled:opacity-100',
-              !showYes && 'opacity-0 invisible',
-              '[transition-property:opacity,transform,color] [transition-duration:150ms,300ms,300ms]',
-              'motion-reduce:[transition-duration:150ms,1ms,300ms]'
-            )}
-            onClick={() => handleVote('yes')}
-            disabled={state.type === StateType.Followup}
-          >
-            <Check size={14} strokeWidth={3} />
-            <span className="sr-only">Yes</span>
-          </Button>
-          <Button
-            type="outline"
-            rounded
-            className={cn(
-              'px-1',
-              !isNo && 'hover:text-warning-600 hover:border-warning-500',
-              isNo &&
-                `bg-warning text-warning-200 !border-warning -translate-x-[calc(100%+var(--container-flex-gap,0.5rem))] disabled:opacity-100`,
-              !showNo && 'opacity-0 invisible',
-              '[transition-property:opacity,transform,color] [transition-duration:150ms,300ms,300ms]',
-              'motion-reduce:[transition-duration:150ms,1ms,300ms]'
+              'px-1 w-7 h-7',
+              'text-foreground-light',
+              '[transition-property:opacity,transform,color] [transition-duration:150ms,250ms,250ms]',
+              'motion-reduce:[transition-duration:150ms,1ms,300ms]',
+              '[transition-timing-function:cubic-bezier(.76,0,.23,1)]',
+              !isNo && 'hover:text-warning hover:border-warning-500',
+              isNo && `bg-warning text-warning-200 border-warning! disabled:opacity-100`,
+              !showNo && 'opacity-0 invisible'
             )}
             onClick={() => handleVote('no')}
             disabled={state.type === StateType.Followup}
           >
-            <X size={14} strokeWidth={3} />
+            <X size={14} strokeWidth={2} className="text-current" />
             <span className="sr-only">No</span>
+          </Button>
+          <Button
+            variant="outline"
+            rounded
+            className={cn(
+              'px-1 w-7 h-7',
+              'text-foreground-light',
+              '[transition-property:opacity,transform,color] [transition-duration:150ms,250ms,250ms]',
+              'motion-reduce:[transition-duration:150ms,1ms,300ms]',
+              '[transition-timing-function:cubic-bezier(.76,0,.23,1)]',
+              !isYes && 'hover:text-brand-600 hover:border-brand-500',
+              isYes &&
+                'bg-brand text-brand-200 border-brand! disabled:opacity-100 -translate-x-[calc(100%+var(--container-inline-flex-gap,0.5rem))]',
+              !showYes && 'opacity-0 invisible'
+            )}
+            onClick={() => handleVote('yes')}
+            disabled={state.type === StateType.Followup}
+          >
+            <Check size={14} strokeWidth={2} />
+            <span className="sr-only">Yes</span>
           </Button>
         </div>
         <div
           className={cn(
-            'flex flex-col gap-1',
+            'flex flex-col gap-0.5',
+            '@[12rem]:absolute @[12rem]:left-9',
             'text-xs',
             'opacity-0 invisible',
             'text-left',
-            '-translate-x-[0.25rem] @[12rem]:-translate-x-[1.25rem]',
-            '[transition-property:opacity,transform] [transition-duration:150ms,300ms]',
+            '-translate-x-2',
+            '[transition-property:opacity,transform]',
+            '[transition-duration:450ms,300ms]',
+            '[transition-delay:200ms,0ms]',
+            '[transition-timing-function:cubic-bezier(.76,0,.23,1)]',
             'motion-reduce:[transition-duration:150ms,1ms]',
-            'delay-300',
-            state.type === StateType.Followup &&
-              'opacity-100 visible -translate-x-0 @[12rem]:-translate-x-[1rem]'
+            'ease-out!',
+            state.type === StateType.Followup && 'opacity-100 visible translate-x-0'
           )}
         >
-          <span className="text-foreground-light">Thanks for your feedback!</span>
-          <FeedbackButton
-            ref={feedbackButtonRef}
-            onClick={() => setModalOpen(true)}
-            isYes={isYes}
-            visible={!unanswered}
-          />
+          {state.type === StateType.Followup && (
+            <>
+              <span className="text-foreground-light">Thanks for your feedback!</span>
+              <FeedbackButton
+                ref={feedbackButtonRef}
+                onClick={() => setModalOpen(true)}
+                isYes={isYes}
+                visible={true}
+              />
+            </>
+          )}
         </div>
       </div>
       <FeedbackModal

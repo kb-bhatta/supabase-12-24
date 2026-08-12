@@ -1,5 +1,5 @@
 import { Auth, Realtime, Storage } from 'icons'
-import { ActivityIcon, DatabaseIcon, HeartIcon, ServerIcon } from 'lucide-react'
+import { ActivityIcon, DatabaseIcon, HeartPulseIcon, ServerIcon } from 'lucide-react'
 import { ReactNode } from 'react'
 
 export type Metric = {
@@ -16,44 +16,57 @@ type MetricCategory = {
   key: string
 }
 
+export const InstanceHealthIcon = ({
+  className,
+  size = 16,
+}: {
+  className?: string
+  size?: number
+}) => <HeartPulseIcon size={size} strokeWidth={1.5} className={className} />
+
 export const METRIC_CATEGORIES = {
   API: {
     label: 'All API usage',
-    icon: (className?: string) => <ActivityIcon size={16} className={className} />,
+    icon: (className?: string) => (
+      <ActivityIcon size={16} strokeWidth={1.5} className={className} />
+    ),
     key: 'api',
   },
   API_DATABASE: {
     label: 'Database API',
-    icon: (className?: string) => <DatabaseIcon size={16} className={className} />,
+    icon: (className?: string) => (
+      <DatabaseIcon size={16} strokeWidth={1.5} className={className} />
+    ),
     key: 'api_database',
   },
   API_AUTH: {
-    label: 'Auth API',
-    icon: (className?: string) => <Auth size={16} className={className} />,
+    label: 'Authentication',
+    icon: (className?: string) => <Auth size={16} strokeWidth={1.5} className={className} />,
     key: 'api_auth',
   },
   API_STORAGE: {
-    label: 'Storage API',
-    icon: (className?: string) => <Storage size={16} className={className} />,
+    label: 'Storage',
+    icon: (className?: string) => <Storage size={16} strokeWidth={1.5} className={className} />,
     key: 'api_storage',
   },
   API_REALTIME: {
-    label: 'Realtime API',
-    icon: (className?: string) => <Realtime size={16} className={className} />,
+    label: 'Realtime',
+    icon: (className?: string) => <Realtime size={16} strokeWidth={1.5} className={className} />,
     key: 'api_realtime',
   },
   INSTANCE: {
     label: 'Instance health',
-    icon: (className?: string) => <HeartIcon size={16} className={className} />,
+    icon: (className?: string) => <InstanceHealthIcon className={className} />,
     key: 'instance',
   },
   SUPAVISOR: {
     label: 'Supavisor',
-    icon: (className?: string) => <ServerIcon size={16} className={className} />,
+    icon: (className?: string) => <ServerIcon size={16} strokeWidth={1.5} className={className} />,
     key: 'supavisor',
   },
 }
 
+// [Joshen] Eventually we can remove some charts here from DEPRECATED_REPORTS from Reports.constants.ts
 export const METRICS: Metric[] = [
   {
     key: 'avg_cpu_usage',
@@ -286,6 +299,14 @@ export const METRICS: Metric[] = [
     provider: 'daily-stats',
     category: METRIC_CATEGORIES.API,
   },
+
+  {
+    key: 'total_cached_egress',
+    label: 'All Cached Egress',
+    provider: 'daily-stats',
+    category: METRIC_CATEGORIES.API_STORAGE,
+  },
+
   {
     key: 'total_storage_patch_requests',
     label: 'Storage PATCH Requests',
@@ -333,7 +354,7 @@ export const METRICS: Metric[] = [
   /** Supavisor */
   {
     key: 'total_supavisor_egress_bytes',
-    label: 'Supavisor Egress',
+    label: 'Shared Pooler Egress',
     provider: 'daily-stats',
     category: METRIC_CATEGORIES.SUPAVISOR,
   },
@@ -371,6 +392,14 @@ export const TIME_PERIODS_REPORTS = [
 ]
 
 export const TIME_PERIODS_INFRA = [
+  {
+    key: '10m',
+    label: 'Last 10 minutes',
+  },
+  {
+    key: '30m',
+    label: 'Last 30 minutes',
+  },
   {
     key: '1h',
     label: 'Last hour',
